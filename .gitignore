@@ -2,3 +2,28 @@ node_modules/
 tmp-workspace/
 data-bin/
 model-bin/
+
+# Build artifacts
+dist/
+dist-node/
+out/
+release/
+
+# Test and coverage outputs
+coverage/
+.vitest/
+
+# Tool caches
+.vite/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
