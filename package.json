@@ -1,16 +1,67 @@
 {
   "name": "labelau",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Industrial spectrogram annotation workstation with Audition-compatible VAD export.",
+  "main": "dist-node/electron/main.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "clean": "node -e \"const fs=require('node:fs');fs.rmSync('dist',{recursive:true,force:true});fs.rmSync('dist-node',{recursive:true,force:true});\"",
+    "dev:renderer": "vite",
+    "dev:service": "tsx watch src/host-service/server.ts",
+    "dev:web": "concurrently -k -n service,renderer -c cyan,green \"pnpm dev:service\" \"pnpm dev:renderer\"",
+    "dev:electron": "pnpm build:node && concurrently -k -n service,renderer,electron -c cyan,green,magenta \"pnpm dev:service\" \"pnpm dev:renderer\" \"wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron dist-node/electron/main.js\"",
+    "build:renderer": "vite build",
+    "build:node": "tsc -p tsconfig.node.json",
+    "build": "pnpm clean && pnpm build:renderer && pnpm build:node",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package:electron": "pnpm build && electron-builder"
   },
-  "keywords": [],
+  "keywords": [
+    "electron",
+    "spectrogram",
+    "annotation",
+    "audio",
+    "vad"
+  ],
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.33.0",
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/manrope": "^5.2.7",
+    "express": "^5.1.0",
+    "fft.js": "^4.0.4",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zustand": "^5.0.8"
+  },
   "devDependencies": {
-    "electron": "^41.2.0"
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.9.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.0",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "41.2.0",
+    "electron-builder": "^26.0.12",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.12",
+    "vitest": "^3.2.4",
+    "wait-on": "^9.0.1"
+  },
+  "build": {
+    "appId": "com.labelau.app",
+    "productName": "LabelAU",
+    "files": [
+      "dist/**/*",
+      "dist-node/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "assets"
+    }
   }
 }
