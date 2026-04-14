@@ -9,6 +9,8 @@ export interface CanvasTheme {
   spectrogramBackground: string;
   overlayBase: string;
   overlayBaseEdge: string;
+  overlayUnsaved: string;
+  overlayUnsavedEdge: string;
   overlayMark: string;
   overlayMarkEdge: string;
   overlayErase: string;
@@ -29,6 +31,8 @@ export interface WaveformTheme {
   playhead: string;
   overlayBase: string;
   overlayBaseEdge: string;
+  overlayUnsaved: string;
+  overlayUnsavedEdge: string;
   overlayMark: string;
   overlayMarkEdge: string;
   overlayErase: string;
@@ -40,6 +44,8 @@ const darkTheme: CanvasTheme = {
   spectrogramBackground: "#09040f",
   overlayBase: "rgba(70, 197, 188, 0.16)",
   overlayBaseEdge: "rgba(135, 255, 244, 0.96)",
+  overlayUnsaved: "rgba(223, 178, 62, 0.22)",
+  overlayUnsavedEdge: "rgba(255, 223, 141, 0.98)",
   overlayMark: "rgba(70, 197, 188, 0.22)",
   overlayMarkEdge: "rgba(151, 255, 247, 0.98)",
   overlayErase: "rgba(236, 111, 76, 0.22)",
@@ -54,6 +60,8 @@ const lightTheme: CanvasTheme = {
   spectrogramBackground: "#09040f",
   overlayBase: "rgba(24, 143, 160, 0.14)",
   overlayBaseEdge: "rgba(170, 255, 255, 0.98)",
+  overlayUnsaved: "rgba(212, 168, 44, 0.24)",
+  overlayUnsavedEdge: "rgba(255, 226, 140, 0.98)",
   overlayMark: "rgba(24, 143, 160, 0.22)",
   overlayMarkEdge: "rgba(188, 255, 255, 0.98)",
   overlayErase: "rgba(207, 94, 63, 0.2)",
@@ -80,6 +88,8 @@ export function getWaveformTheme(mode: SystemThemeMode): WaveformTheme {
       playhead: "#f0e6d7",
       overlayBase: "rgba(86, 197, 154, 0.2)",
       overlayBaseEdge: "rgba(207, 255, 219, 0.96)",
+      overlayUnsaved: "rgba(223, 178, 62, 0.24)",
+      overlayUnsavedEdge: "rgba(255, 229, 156, 1)",
       overlayMark: "rgba(86, 197, 154, 0.28)",
       overlayMarkEdge: "rgba(214, 255, 225, 1)",
       overlayErase: "rgba(229, 107, 84, 0.24)",
@@ -98,6 +108,8 @@ export function getWaveformTheme(mode: SystemThemeMode): WaveformTheme {
     playhead: "#ffffff",
     overlayBase: "rgba(54, 160, 118, 0.18)",
     overlayBaseEdge: "rgba(47, 104, 78, 0.92)",
+    overlayUnsaved: "rgba(217, 171, 53, 0.24)",
+    overlayUnsavedEdge: "rgba(156, 112, 12, 0.96)",
     overlayMark: "rgba(54, 160, 118, 0.26)",
     overlayMarkEdge: "rgba(34, 87, 65, 0.96)",
     overlayErase: "rgba(211, 96, 69, 0.22)",

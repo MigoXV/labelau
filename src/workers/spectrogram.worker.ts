@@ -71,6 +71,20 @@ const LIGHT_SPECTROGRAM_STOPS = [
   { at: 1, color: [255, 248, 226] as const },
 ];
 
+function percentile(values: number[], ratio: number): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = clamp(
+    Math.floor((sorted.length - 1) * ratio),
+    0,
+    sorted.length - 1,
+  );
+  return sorted[index];
+}
+
 function cacheResult(key: string, value: Uint8ClampedArray): Uint8ClampedArray {
   if (cache.has(key)) {
     cache.delete(key);
@@ -145,10 +159,16 @@ function magnitudesForFrame(frame: Float32Array): Float32Array {
 
 function colorize(
   value: number,
+  minValue: number,
+  maxValue: number,
   themeMode: SystemThemeMode,
 ): [number, number, number, number] {
-  const normalized = clamp((value + 96) / 78, 0, 1);
-  const boosted = normalized ** 0.88;
+  const normalized = clamp(
+    (value - minValue) / Math.max(maxValue - minValue, 1e-6),
+    0,
+    1,
+  );
+  const boosted = normalized ** 0.72;
   const palette =
     themeMode === "dark" ? DARK_SPECTROGRAM_STOPS : LIGHT_SPECTROGRAM_STOPS;
 
@@ -174,6 +194,45 @@ function colorize(
   return [brightest[0], brightest[1], brightest[2], 255];
 }
 
+function estimateNoiseFloor(columns: Float32Array[]): Float32Array {
+  const binCount = columns[0]?.length ?? 0;
+  const floor = new Float32Array(binCount);
+  const mean = new Float32Array(binCount);
+  floor.fill(Number.POSITIVE_INFINITY);
+
+  for (const column of columns) {
+    for (let binIndex = 0; binIndex < binCount; binIndex += 1) {
+      const value = column[binIndex];
+      floor[binIndex] = Math.min(floor[binIndex], value);
+      mean[binIndex] += value;
+    }
+  }
+
+  for (let binIndex = 0; binIndex < binCount; binIndex += 1) {
+    const blended = lerp(
+      floor[binIndex],
+      mean[binIndex] / Math.max(columns.length, 1),
+      0.16,
+    );
+    floor[binIndex] = Number.isFinite(blended) ? blended : 0;
+  }
+
+  const smoothed = new Float32Array(binCount);
+  for (let binIndex = 0; binIndex < binCount; binIndex += 1) {
+    let weightedSum = 0;
+    let totalWeight = 0;
+    for (let offset = -2; offset <= 2; offset += 1) {
+      const sampleIndex = clamp(binIndex + offset, 0, binCount - 1);
+      const weight = offset === 0 ? 0.4 : Math.abs(offset) === 1 ? 0.2 : 0.1;
+      weightedSum += floor[sampleIndex] * weight;
+      totalWeight += weight;
+    }
+    smoothed[binIndex] = weightedSum / Math.max(totalWeight, 1e-6);
+  }
+
+  return smoothed;
+}
+
 function renderSpectrogram(
   document: WorkerDocument,
   request: Extract<IncomingMessage, { kind: "render" }>,
@@ -191,6 +250,34 @@ function renderSpectrogram(
     const centerSample = Math.round(time * sampleRate);
     return magnitudesForFrame(createFrame(channel, centerSample));
   });
+  const noiseFloor = estimateNoiseFloor(columns);
+  const sampledValues: number[] = [];
+  const enhancedColumns = columns.map((column, columnIndex) => {
+    const enhanced = new Float32Array(column.length);
+    for (let binIndex = 0; binIndex < column.length; binIndex += 1) {
+      const frequency = (binIndex / Math.max(column.length - 1, 1)) * nyquist;
+      const voiceWeight =
+        frequency >= 180 && frequency <= 4200
+          ? 1.12
+          : frequency >= 90 && frequency <= 6200
+            ? 1.04
+            : 1;
+      const enhancedValue = Math.max(
+        0,
+        (column[binIndex] - noiseFloor[binIndex]) * voiceWeight,
+      );
+      enhanced[binIndex] = enhancedValue;
+      if (columnIndex % 4 === 0 && binIndex % 2 === 0) {
+        sampledValues.push(enhancedValue);
+      }
+    }
+    return enhanced;
+  });
+  const lowerBound = percentile(sampledValues, 0.08);
+  const upperBound = Math.max(
+    percentile(sampledValues, 0.995),
+    lowerBound + 10,
+  );
 
   for (let row = 0; row < height; row += 1) {
     const frequency = frequencyForRow(
@@ -209,7 +296,9 @@ function renderSpectrogram(
 
     for (let x = 0; x < width; x += 1) {
       const [red, green, blue, alpha] = colorize(
-        columns[x][binIndex],
+        enhancedColumns[x][binIndex],
+        lowerBound,
+        upperBound,
         request.themeMode,
       );
       const offset = (row * width + x) * 4;

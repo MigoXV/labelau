@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
 } from "react";
 
 import { hydrateAudio } from "./audio";
@@ -21,7 +22,6 @@ import { SpectrogramWorkerClient } from "./worker-client";
 import {
   MIN_FREQ_WINDOW_HZ,
   MIN_TIME_WINDOW_SEC,
-  MAX_FRONTEND_SAMPLE_RATE,
   MAX_SPECTROGRAM_RENDER_HEIGHT,
   MAX_SPECTROGRAM_RENDER_WIDTH,
   SPECTROGRAM_RENDER_SCALE,
@@ -49,11 +49,14 @@ type HeldTool = "mark" | "erase" | null;
 type EntryState = "dirty" | "saved" | "matched" | "new";
 type FileFilter = "all" | "pending" | "dirty" | "done";
 type SegmentHitPart = "body" | "start" | "end";
+type PlaybackRate = 1 | 2 | 3 | 4;
 
 interface HydratedDocument extends LoadedAudioDocument {
   blobUrl: string;
   waveformLevels: WaveformLevel[][];
   waveformSampleRate: number;
+  savedSegments: VadSegment[];
+  segmentHistory: VadSegment[][];
   isDirty: boolean;
 }
 
@@ -84,10 +87,15 @@ interface SegmentOverlayStyle {
   edgeStyle: string;
 }
 
+interface SegmentOverlayGroups {
+  saved: VadSegment[];
+  unsaved: VadSegment[];
+}
+
 function getDefaultTimeRange(durationSec: number): TimeRange {
   return {
     startSec: 0,
-    endSec: Math.min(12, durationSec),
+    endSec: durationSec,
   };
 }
 
@@ -129,13 +137,6 @@ function getEntryStateLabel(state: EntryState): string {
   }
 }
 
-function formatDurationLabel(value: number): string {
-  const totalSeconds = Math.max(0, Math.round(value));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
 function matchesFileFilter(state: EntryState, filter: FileFilter): boolean {
   switch (filter) {
     case "pending":
@@ -174,6 +175,45 @@ function getDisplayCsvPath(
   overrides: Record<string, EntryOverlayState>,
 ): string | null {
   return overrides[entry.audioPath]?.csvPath ?? entry.csvPath;
+}
+
+function centerElementInScrollContainer(
+  container: HTMLElement,
+  target: HTMLElement,
+): void {
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const nextScrollTop =
+    container.scrollTop +
+    (targetRect.top - containerRect.top) -
+    container.clientHeight / 2 +
+    target.clientHeight / 2;
+  container.scrollTo({
+    top: Math.max(0, nextScrollTop),
+    behavior: "smooth",
+  });
+}
+
+function findDirectoryPathChain(
+  node: CorpusDirectory,
+  audioPath: string,
+  trail: string[] = [],
+): string[] | null {
+  if (node.entries.some((entry) => entry.audioPath === audioPath)) {
+    return trail;
+  }
+
+  for (const directory of node.directories) {
+    const nextTrail = directory.relativePath
+      ? [...trail, directory.relativePath]
+      : trail;
+    const match = findDirectoryPathChain(directory, audioPath, nextTrail);
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
 }
 
 function setWithinDuration(
@@ -258,6 +298,46 @@ function getSecondsForClientX(
   return timeRange.startSec + alpha * (timeRange.endSec - timeRange.startSec);
 }
 
+function getNextTool(current: HeldTool): HeldTool {
+  if (current === null) {
+    return "mark";
+  }
+
+  if (current === "mark") {
+    return "erase";
+  }
+
+  return null;
+}
+
+function getToolLabel(tool: HeldTool): string {
+  if (tool === "mark") {
+    return "M 标注";
+  }
+
+  if (tool === "erase") {
+    return "E 擦除";
+  }
+
+  return "拖拽平移";
+}
+
+function getNextPlaybackRate(current: PlaybackRate): PlaybackRate {
+  if (current === 1) {
+    return 2;
+  }
+
+  if (current === 2) {
+    return 3;
+  }
+
+  if (current === 3) {
+    return 4;
+  }
+
+  return 1;
+}
+
 function getSegmentHit(
   secondsValue: number,
   width: number,
@@ -292,6 +372,48 @@ function getSegmentHit(
   return null;
 }
 
+function cloneSegments(segments: VadSegment[]): VadSegment[] {
+  return segments.map((segment) => ({ ...segment }));
+}
+
+function segmentsEqual(left: VadSegment[], right: VadSegment[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    if (
+      left[index].startSec !== right[index].startSec ||
+      left[index].endSec !== right[index].endSec
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function getSegmentKey(segment: VadSegment): string {
+  return `${segment.startSec}:${segment.endSec}`;
+}
+
+function getSegmentOverlayGroups(
+  savedSegments: VadSegment[],
+  currentSegments: VadSegment[],
+): SegmentOverlayGroups {
+  const savedKeys = new Set(savedSegments.map(getSegmentKey));
+  const currentKeys = new Set(currentSegments.map(getSegmentKey));
+
+  return {
+    saved: savedSegments.filter((segment) =>
+      currentKeys.has(getSegmentKey(segment)),
+    ),
+    unsaved: currentSegments.filter(
+      (segment) => !savedKeys.has(getSegmentKey(segment)),
+    ),
+  };
+}
+
 export function App() {
   const bridge = useMemo<HostBridge>(() => getHostBridge(), []);
   const themeMode = useSystemTheme();
@@ -322,12 +444,25 @@ export function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const cacheRef = useRef(new Map<string, HydratedDocument>());
   const lruRef = useRef<string[]>([]);
+  const treePanelRef = useRef<HTMLDivElement | null>(null);
+  const editorRef = useRef<HTMLElement | null>(null);
+  const sidebarResizeRef = useRef<{
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const editorResizeRef = useRef<{
+    startY: number;
+    startHeight: number;
+    containerHeight: number;
+  } | null>(null);
 
   const [rootPath, setRootPath] = useState("");
   const [tree, setTree] = useState<CorpusEntryTree | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [fileFilter, setFileFilter] = useState<FileFilter>("all");
   const [selectedAudioPath, setSelectedAudioPath] = useState<string | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(320);
+  const [waveformHeight, setWaveformHeight] = useState(256);
   const [currentDocument, setCurrentDocument] = useState<HydratedDocument | null>(
     null,
   );
@@ -343,6 +478,7 @@ export function App() {
     useState<FrequencyScale>("linear");
   const [selectedChannel, setSelectedChannel] = useState(0);
   const [playheadSec, setPlayheadSec] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState<PlaybackRate>(1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [isLoadingDocument, setIsLoadingDocument] = useState(false);
@@ -374,6 +510,54 @@ export function App() {
       for (const document of cacheRef.current.values()) {
         URL.revokeObjectURL(document.blobUrl);
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!audioRef.current) {
+      return;
+    }
+
+    audioRef.current.playbackRate = playbackRate;
+  }, [playbackRate]);
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      if (sidebarResizeRef.current) {
+        const { startX, startWidth } = sidebarResizeRef.current;
+        setSidebarWidth(clamp(startWidth + event.clientX - startX, 240, 520));
+      }
+
+      if (editorResizeRef.current) {
+        const { startY, startHeight, containerHeight } = editorResizeRef.current;
+        setWaveformHeight(
+          clamp(
+            startHeight + event.clientY - startY,
+            160,
+            Math.max(containerHeight - 180, 160),
+          ),
+        );
+      }
+    };
+
+    const clearDragState = () => {
+      if (!sidebarResizeRef.current && !editorResizeRef.current) {
+        return;
+      }
+
+      sidebarResizeRef.current = null;
+      editorResizeRef.current = null;
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", clearDragState);
+    window.addEventListener("pointercancel", clearDragState);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", clearDragState);
+      window.removeEventListener("pointercancel", clearDragState);
     };
   }, []);
 
@@ -489,6 +673,7 @@ export function App() {
             audioRef.current.pause();
             audioRef.current.src = cached.blobUrl;
             audioRef.current.currentTime = 0;
+            audioRef.current.playbackRate = playbackRate;
           }
           return;
         }
@@ -510,6 +695,8 @@ export function App() {
           blobUrl: hydratedAudio.blobUrl,
           waveformLevels: hydratedAudio.waveform.waveformLevels,
           waveformSampleRate: hydratedAudio.waveform.sampleRate,
+          savedSegments: cloneSegments(loaded.segments),
+          segmentHistory: [],
           isDirty: false,
         };
 
@@ -530,6 +717,7 @@ export function App() {
           audioRef.current.pause();
           audioRef.current.src = document.blobUrl;
           audioRef.current.currentTime = 0;
+          audioRef.current.playbackRate = playbackRate;
         }
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
@@ -543,7 +731,7 @@ export function App() {
         }
       }
     },
-    [bridge, cacheDocument, touchCache],
+    [bridge, cacheDocument, playbackRate, touchCache],
   );
 
   useEffect(() => {
@@ -573,6 +761,34 @@ export function App() {
       setSelectedAudioPath(nextAudioPath);
     },
     [currentDocument?.isDirty, selectedAudioPath],
+  );
+
+  const centerTreeEntry = useCallback((audioPath: string) => {
+    const container = treePanelRef.current;
+    if (!container) {
+      return;
+    }
+
+    const target = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-audio-path]"),
+    ).find((element) => element.dataset.audioPath === audioPath);
+    if (!target) {
+      return;
+    }
+
+    centerElementInScrollContainer(container, target);
+  }, []);
+
+  const handleTreeSelect = useCallback(
+    (entry: CorpusEntry) => {
+      if (entry.audioPath === selectedAudioPath) {
+        centerTreeEntry(entry.audioPath);
+        return;
+      }
+
+      selectAudioPath(entry.audioPath);
+    },
+    [centerTreeEntry, selectAudioPath, selectedAudioPath],
   );
 
   useEffect(() => {
@@ -663,7 +879,7 @@ export function App() {
   }, [currentDocument, isPlaying, playheadSec]);
 
   const seekTo = useCallback(
-    (secondsValue: number) => {
+    async (secondsValue: number, shouldPlay = false) => {
       if (!currentDocument || !audioRef.current) {
         return;
       }
@@ -671,6 +887,14 @@ export function App() {
       const nextPlayhead = clamp(secondsValue, 0, currentDocument.durationSec);
       setPlayheadSec(nextPlayhead);
       audioRef.current.currentTime = nextPlayhead;
+      if (shouldPlay) {
+        try {
+          await audioRef.current.play();
+          setIsPlaying(true);
+        } catch {
+          setIsPlaying(false);
+        }
+      }
     },
     [currentDocument],
   );
@@ -693,6 +917,8 @@ export function App() {
       updateCurrentDocument((document) => ({
         ...document,
         csvPath: result.csvPath,
+        savedSegments: cloneSegments(document.segments),
+        segmentHistory: [],
         isDirty: false,
       }));
       setDirtyPaths((previous) => {
@@ -726,9 +952,18 @@ export function App() {
         return;
       }
 
+      const nextSegments = normalizeSegments(updater(currentDocument.segments));
+      if (segmentsEqual(currentDocument.segments, nextSegments)) {
+        return;
+      }
+
       updateCurrentDocument((document) => ({
         ...document,
-        segments: normalizeSegments(updater(document.segments)),
+        segments: nextSegments,
+        segmentHistory: [
+          ...document.segmentHistory.slice(-49),
+          cloneSegments(document.segments),
+        ],
         isDirty: true,
       }));
       setDirtyPaths((previous) => {
@@ -744,6 +979,59 @@ export function App() {
     },
     [currentDocument, updateCurrentDocument],
   );
+
+  const undoLastChange = useCallback(() => {
+    if (!currentDocument || currentDocument.segmentHistory.length === 0) {
+      return;
+    }
+
+    const previousSegments =
+      currentDocument.segmentHistory[currentDocument.segmentHistory.length - 1];
+    updateCurrentDocument((document) => ({
+      ...document,
+      segments: cloneSegments(previousSegments),
+      segmentHistory: document.segmentHistory.slice(0, -1),
+      isDirty: !segmentsEqual(previousSegments, document.savedSegments),
+    }));
+    setDirtyPaths((previous) => {
+      const next = new Set(previous);
+      if (segmentsEqual(previousSegments, currentDocument.savedSegments)) {
+        next.delete(currentDocument.audioPath);
+      } else {
+        next.add(currentDocument.audioPath);
+      }
+      return next;
+    });
+    setSavedPaths((previous) => {
+      const next = new Set(previous);
+      next.delete(currentDocument.audioPath);
+      return next;
+    });
+  }, [currentDocument, updateCurrentDocument]);
+
+  const discardCurrentChanges = useCallback(() => {
+    if (!currentDocument || !currentDocument.isDirty) {
+      return;
+    }
+
+    updateCurrentDocument((document) => ({
+      ...document,
+      segments: cloneSegments(document.savedSegments),
+      segmentHistory: [],
+      isDirty: false,
+    }));
+    setDirtyPaths((previous) => {
+      const next = new Set(previous);
+      next.delete(currentDocument.audioPath);
+      return next;
+    });
+    setSavedPaths((previous) => {
+      const next = new Set(previous);
+      next.delete(currentDocument.audioPath);
+      return next;
+    });
+    setStatusMessage(`已舍弃 ${currentDocument.stem} 的未保存更改`);
+  }, [currentDocument, updateCurrentDocument]);
 
   const adjustSegment = useCallback(
     (segmentIndex: number, segment: VadSegment) => {
@@ -811,6 +1099,19 @@ export function App() {
     [allEntries, selectedAudioPath],
   );
 
+  useEffect(() => {
+    if (!selectedAudioPath) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      centerTreeEntry(selectedAudioPath);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [centerTreeEntry, selectedAudioPath, visibleEntries]);
+
   const previousEntry =
     selectedEntryIndex > 0 ? visibleEntries[selectedEntryIndex - 1] : null;
   const nextEntry =
@@ -836,6 +1137,12 @@ export function App() {
         return;
       }
 
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        undoLastChange();
+        return;
+      }
+
       if (event.code === "Space") {
         event.preventDefault();
         void togglePlayback();
@@ -848,7 +1155,35 @@ export function App() {
         return;
       }
 
-      if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+      if (event.key === "ArrowLeft" && currentDocument) {
+        event.preventDefault();
+        const span = timeRange.endSec - timeRange.startSec;
+        const delta = Math.max(span * 0.12, MIN_TIME_WINDOW_SEC * 0.5);
+        setTimeRange((previous) =>
+          setWithinDuration(
+            previous.startSec - delta,
+            previous.endSec - delta,
+            currentDocument.durationSec,
+          ),
+        );
+        return;
+      }
+
+      if (event.key === "ArrowRight" && currentDocument) {
+        event.preventDefault();
+        const span = timeRange.endSec - timeRange.startSec;
+        const delta = Math.max(span * 0.12, MIN_TIME_WINDOW_SEC * 0.5);
+        setTimeRange((previous) =>
+          setWithinDuration(
+            previous.startSec + delta,
+            previous.endSec + delta,
+            currentDocument.durationSec,
+          ),
+        );
+        return;
+      }
+
+      if (event.key === "ArrowUp") {
         const candidate =
           selectedEntryIndex > 0 ? visibleEntries[selectedEntryIndex - 1] : null;
         if (candidate) {
@@ -858,7 +1193,7 @@ export function App() {
         return;
       }
 
-      if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+      if (event.key === "ArrowDown") {
         const candidate =
           selectedEntryIndex >= 0 && selectedEntryIndex < visibleEntries.length - 1
             ? visibleEntries[selectedEntryIndex + 1]
@@ -872,50 +1207,72 @@ export function App() {
 
       if (event.key.toLowerCase() === "m") {
         setHeldTool("mark");
+        return;
       }
 
       if (event.key.toLowerCase() === "e") {
         setHeldTool("erase");
-      }
-    };
-
-    const handleKeyUp = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() === "m" && heldTool === "mark") {
-        setHeldTool(null);
+        return;
       }
 
-      if (event.key.toLowerCase() === "e" && heldTool === "erase") {
+      if (event.key.toLowerCase() === "v") {
         setHeldTool(null);
+        return;
+      }
+
+      if (event.key.toLowerCase() === "x") {
+        setFrequencyScale((previous) =>
+          previous === "linear" ? "log" : "linear",
+        );
+        return;
+      }
+
+      if (event.key.toLowerCase() === "r") {
+        setPlaybackRate((previous) => getNextPlaybackRate(previous));
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
     };
   }, [
-    heldTool,
+    undoLastChange,
+    currentDocument,
     saveCurrentDocument,
     selectedEntryIndex,
     selectAudioPath,
+    timeRange.endSec,
+    timeRange.startSec,
     togglePlayback,
     visibleEntries,
   ]);
 
   const currentNyquist = currentDocument ? currentDocument.waveformSampleRate / 2 : 8000;
   const currentSegments = currentDocument?.segments ?? [];
+  const savedSegments = currentDocument?.savedSegments ?? [];
+  const segmentOverlayGroups = useMemo(
+    () => getSegmentOverlayGroups(savedSegments, currentSegments),
+    [currentSegments, savedSegments],
+  );
   const currentState = selectedEntry
     ? getEntryState(selectedEntry, dirtyPaths, savedPaths, entryOverrides)
     : null;
 
   return (
-    <div className="app-shell" style={uiThemeStyle}>
+    <div
+      className="app-shell"
+      style={
+        {
+          ...uiThemeStyle,
+          "--sidebar-width": `${sidebarWidth}px`,
+          "--waveform-height": `${waveformHeight}px`,
+        } as CSSProperties
+      }
+    >
       <aside className="sidebar">
         <div className="sidebar-header">
           <div>
-            <p className="eyebrow">任务导航</p>
             <h1>LabelAU</h1>
           </div>
           <button className="action-button" onClick={() => void openDirectory()}>
@@ -948,45 +1305,64 @@ export function App() {
 
         <div className="filter-panel">
           <div className="filter-header">
-            <span className="label">任务筛选</span>
-            <span className="filter-count">{fileStats.all} 个文件</span>
-          </div>
-          <div className="filter-row">
-            {([
-              ["all", "全部"],
-              ["pending", "未处理"],
-              ["dirty", "未保存"],
-              ["done", "已处理"],
-            ] as const).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                className={
-                  fileFilter === value ? "filter-chip active" : "filter-chip"
-                }
-                onClick={() => setFileFilter(value)}
-              >
-                {label}
-              </button>
-            ))}
+            <div className="filter-header-copy">
+              <span className="label">任务筛选</span>
+              <span className="filter-count">{fileStats.all} 个文件</span>
+            </div>
           </div>
           <div className="summary-grid">
-            <div className="summary-tile">
+            <button
+              type="button"
+              className={
+                fileFilter === "pending"
+                  ? "summary-tile summary-tile-active"
+                  : "summary-tile"
+              }
+              onClick={() =>
+                setFileFilter((previous) =>
+                  previous === "pending" ? "all" : "pending",
+                )
+              }
+            >
               <span>未处理</span>
               <strong>{fileStats.pending}</strong>
-            </div>
-            <div className="summary-tile">
+            </button>
+            <button
+              type="button"
+              className={
+                fileFilter === "dirty"
+                  ? "summary-tile summary-tile-active"
+                  : "summary-tile"
+              }
+              onClick={() =>
+                setFileFilter((previous) =>
+                  previous === "dirty" ? "all" : "dirty",
+                )
+              }
+            >
               <span>未保存</span>
               <strong>{fileStats.dirty}</strong>
-            </div>
-            <div className="summary-tile">
+            </button>
+            <button
+              type="button"
+              className={
+                fileFilter === "done"
+                  ? "summary-tile summary-tile-active"
+                  : "summary-tile"
+              }
+              onClick={() =>
+                setFileFilter((previous) =>
+                  previous === "done" ? "all" : "done",
+                )
+              }
+            >
               <span>已处理</span>
               <strong>{fileStats.done}</strong>
-            </div>
+            </button>
           </div>
         </div>
 
-        <div className="tree-panel">
+        <div ref={treePanelRef} className="tree-panel">
           {filteredTree ? (
             <DirectoryTreeView
               tree={filteredTree}
@@ -994,7 +1370,7 @@ export function App() {
               dirtyPaths={dirtyPaths}
               savedPaths={savedPaths}
               entryOverrides={entryOverrides}
-              onSelect={(entry) => selectAudioPath(entry.audioPath)}
+              onSelect={handleTreeSelect}
             />
           ) : (
             <div className="empty-state">
@@ -1008,23 +1384,33 @@ export function App() {
           )}
         </div>
       </aside>
+      <div
+        className="sidebar-resizer"
+        onPointerDown={(event) => {
+          sidebarResizeRef.current = {
+            startX: event.clientX,
+            startWidth: sidebarWidth,
+          };
+          document.body.style.userSelect = "none";
+          document.body.style.cursor = "ew-resize";
+        }}
+      />
 
       <main className="workspace">
         <header className="workspace-header">
           <div className="toolbar toolbar-primary">
             <div className="toolbar-title">
-              <p className="eyebrow">当前文件</p>
               <h2>
                 {currentDocument?.stem ??
                   (rootPath ? "请从左侧选择音频" : "开始音频标注")}
               </h2>
-              <p className="toolbar-subtitle">
-                {currentDocument
-                  ? `${formatDurationLabel(currentDocument.durationSec)} · ${currentDocument.channelCount} 通道 · ${currentDocument.csvPath ? "已关联 CSV" : "将新建 CSV"}`
-                  : rootPath
+              {!currentDocument ? (
+                <p className="toolbar-subtitle">
+                  {rootPath
                     ? "左侧文件列表会展示当前目录下可工作的音频文件。"
                     : "先打开一个包含 WAV 文件的目录，系统会自动恢复已有标注。"}
-              </p>
+                </p>
+              ) : null}
             </div>
 
             <div className="toolbar-actions">
@@ -1050,6 +1436,13 @@ export function App() {
                 {isPlaying ? "暂停" : "播放"}
               </button>
               <button
+                className="ghost-button"
+                disabled={!currentDocument?.isDirty || isSaving}
+                onClick={() => discardCurrentChanges()}
+              >
+                舍弃更改
+              </button>
+              <button
                 className={
                   currentDocument?.isDirty
                     ? "action-button action-button-attention"
@@ -1064,22 +1457,37 @@ export function App() {
           </div>
 
           <div className="toolbar toolbar-secondary">
-            <div className="toolbar-metrics">
-              <Metric
-                label="工具"
-                value={
-                  heldTool === "mark"
-                    ? "M 标注"
-                    : heldTool === "erase"
-                      ? "E 擦除"
-                      : "拖拽平移"
+            <div className="toolbar-controls">
+              <button
+                className="ghost-button toolbar-toggle"
+                disabled={!currentDocument}
+                onClick={() => setHeldTool((previous) => getNextTool(previous))}
+              >
+                工具：{getToolLabel(heldTool)}
+              </button>
+              <button
+                className="ghost-button toolbar-toggle"
+                disabled={!currentDocument}
+                onClick={() =>
+                  setFrequencyScale((previous) =>
+                    previous === "linear" ? "log" : "linear",
+                  )
                 }
-              />
-              <Metric label="缩放" value={frequencyScale === "linear" ? "线性" : "对数"} />
-              <Metric
-                label="视图"
-                value={`${formatSeconds(timeRange.startSec)} - ${formatSeconds(timeRange.endSec)}`}
-              />
+              >
+                缩放：{frequencyScale === "linear" ? "线性" : "对数"}
+              </button>
+              <button
+                className="ghost-button toolbar-toggle"
+                disabled={!currentDocument}
+                onClick={() =>
+                  setPlaybackRate((previous) => getNextPlaybackRate(previous))
+                }
+              >
+                倍速：{playbackRate}x
+              </button>
+            </div>
+
+            <div className="toolbar-metrics">
               <Metric
                 label="状态"
                 value={currentState ? getEntryStateLabel(currentState) : "待开始"}
@@ -1093,7 +1501,7 @@ export function App() {
           </div>
         </header>
 
-        <section className="editor">
+        <section ref={editorRef} className="editor">
           {currentDocument ? (
             <>
               <WaveformPanel
@@ -1102,6 +1510,7 @@ export function App() {
                 timeRange={timeRange}
                 playheadSec={playheadSec}
                 segments={currentSegments}
+                overlayGroups={segmentOverlayGroups}
                 heldTool={heldTool}
                 onSeek={seekTo}
                 onSetTimeRange={(startSec, endSec) =>
@@ -1137,82 +1546,91 @@ export function App() {
                 }
                 onAdjustSegment={adjustSegment}
               />
+              <div
+                className="editor-resizer"
+                onPointerDown={(event) => {
+                  const rect = editorRef.current?.getBoundingClientRect();
+                  if (!rect) {
+                    return;
+                  }
 
-              <div className="spectrogram-header">
-                <div className="channel-picker">
-                  {Array.from({ length: currentDocument.channelCount }, (_, index) => (
-                    <button
-                      key={index}
-                      className={index === selectedChannel ? "channel-chip active" : "channel-chip"}
-                      onClick={() => setSelectedChannel(index)}
-                    >
-                      {currentDocument.channelLabels?.[index] ?? `声道 ${index + 1}`}
-                    </button>
-                  ))}
+                  editorResizeRef.current = {
+                    startY: event.clientY,
+                    startHeight: waveformHeight,
+                    containerHeight: rect.height,
+                  };
+                  document.body.style.userSelect = "none";
+                  document.body.style.cursor = "ns-resize";
+                }}
+              />
+
+              <div className="spectrogram-shell">
+                <div className="spectrogram-header">
+                  <div className="channel-picker">
+                    {Array.from({ length: currentDocument.channelCount }, (_, index) => (
+                      <button
+                        key={index}
+                        className={index === selectedChannel ? "channel-chip active" : "channel-chip"}
+                        onClick={() => setSelectedChannel(index)}
+                      >
+                        {currentDocument.channelLabels?.[index] ?? `声道 ${index + 1}`}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <button
-                  className="ghost-button"
-                  onClick={() =>
-                    setFrequencyScale((previous) =>
-                      previous === "linear" ? "log" : "linear",
+                <SpectrogramPanel
+                  worker={spectrogramWorkerRef.current}
+                  document={currentDocument}
+                  selectedChannel={selectedChannel}
+                  timeRange={timeRange}
+                  frequencyRange={frequencyRange}
+                  frequencyScale={frequencyScale}
+                  playheadSec={playheadSec}
+                  segments={currentSegments}
+                  overlayGroups={segmentOverlayGroups}
+                  heldTool={heldTool}
+                  canvasTheme={canvasTheme}
+                  onSeek={seekTo}
+                  onSetTimeRange={(startSec, endSec) =>
+                    setTimeRange(
+                      setWithinDuration(
+                        startSec,
+                        endSec,
+                        currentDocument.durationSec,
+                      ),
                     )
                   }
-                >
-                  {frequencyScale === "linear" ? "切换到对数" : "切换到线性"}
-                </button>
+                  onSetFrequencyRange={(minFreq, maxFreq) =>
+                    setFrequencyRange(
+                      setWithinNyquist(minFreq, maxFreq, currentNyquist),
+                    )
+                  }
+                  onWheelZoom={(centerFreq, factor) => {
+                    setFrequencyRange((previous) => {
+                      const span = previous.maxFreq - previous.minFreq;
+                      const nextSpan = clamp(
+                        span * factor,
+                        MIN_FREQ_WINDOW_HZ,
+                        currentNyquist,
+                      );
+                      return setWithinNyquist(
+                        centerFreq - (centerFreq - previous.minFreq) * (nextSpan / span),
+                        centerFreq + (previous.maxFreq - centerFreq) * (nextSpan / span),
+                        currentNyquist,
+                      );
+                    });
+                  }}
+                  onCommitSegment={(segment) =>
+                    updateSegments((segments) =>
+                      heldTool === "erase"
+                        ? eraseSegment(segments, segment)
+                        : addSegment(segments, segment),
+                    )
+                  }
+                  onAdjustSegment={adjustSegment}
+                />
               </div>
-
-              <SpectrogramPanel
-                worker={spectrogramWorkerRef.current}
-                document={currentDocument}
-                selectedChannel={selectedChannel}
-                timeRange={timeRange}
-                frequencyRange={frequencyRange}
-                frequencyScale={frequencyScale}
-                playheadSec={playheadSec}
-                segments={currentSegments}
-                heldTool={heldTool}
-                canvasTheme={canvasTheme}
-                onSeek={seekTo}
-                onSetTimeRange={(startSec, endSec) =>
-                  setTimeRange(
-                    setWithinDuration(
-                      startSec,
-                      endSec,
-                      currentDocument.durationSec,
-                    ),
-                  )
-                }
-                onSetFrequencyRange={(minFreq, maxFreq) =>
-                  setFrequencyRange(
-                    setWithinNyquist(minFreq, maxFreq, currentNyquist),
-                  )
-                }
-                onWheelZoom={(centerFreq, factor) => {
-                  setFrequencyRange((previous) => {
-                    const span = previous.maxFreq - previous.minFreq;
-                    const nextSpan = clamp(
-                      span * factor,
-                      MIN_FREQ_WINDOW_HZ,
-                      currentNyquist,
-                    );
-                    return setWithinNyquist(
-                      centerFreq - (centerFreq - previous.minFreq) * (nextSpan / span),
-                      centerFreq + (previous.maxFreq - centerFreq) * (nextSpan / span),
-                      currentNyquist,
-                    );
-                  });
-                }}
-                onCommitSegment={(segment) =>
-                  updateSegments((segments) =>
-                    heldTool === "erase"
-                      ? eraseSegment(segments, segment)
-                      : addSegment(segments, segment),
-                  )
-                }
-                onAdjustSegment={adjustSegment}
-              />
             </>
           ) : (
             <div className="editor-empty">
@@ -1244,18 +1662,6 @@ export function App() {
         <footer className="status-bar">
           <div className="status-group">
             <span className="status-chip">
-              {currentDocument?.stem ?? (rootPath ? "未选择文件" : "未打开目录")}
-            </span>
-            <span className="status-chip">
-              {isScanning
-                ? "正在扫描目录"
-                : isLoadingDocument
-                  ? "正在载入音频"
-                  : isSaving
-                    ? "正在保存"
-                    : "就绪"}
-            </span>
-            <span className="status-chip">
               {currentDocument
                 ? `${formatSeconds(playheadSec)} / ${formatSeconds(currentDocument.durationSec)}`
                 : "0:00.00 / 0:00.00"}
@@ -1266,14 +1672,12 @@ export function App() {
             <span className="status-chip">
               标注段 {currentSegments.length}
             </span>
-            <span className="status-chip">
-              {currentDocument?.isDirty ? "有未保存修改" : "已保存"}
-            </span>
+            {currentDocument?.isDirty ? (
+              <span className="status-chip">有未保存修改</span>
+            ) : null}
             {currentDocument ? (
               <span className="status-chip">
-                原始 {currentDocument.sampleRate} Hz · 前端{" "}
-                {Math.min(currentDocument.sampleRate, MAX_FRONTEND_SAMPLE_RATE)} Hz ·{" "}
-                {currentDocument.channelCount} 通道
+                采样率 {currentDocument.sampleRate} Hz · {currentDocument.channelCount} 通道
               </span>
             ) : null}
             <span className="status-chip">空格 播放 · S 保存 · M 标注 · E 擦除</span>
@@ -1336,8 +1740,47 @@ function DirectoryTreeView({
   entryOverrides: Record<string, EntryOverlayState>;
   onSelect: (entry: CorpusEntry) => void;
 }) {
+  const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  useEffect(() => {
+    if (!selectedAudioPath) {
+      return;
+    }
+
+    const expandedChain = findDirectoryPathChain(tree, selectedAudioPath);
+    if (!expandedChain || expandedChain.length === 0) {
+      return;
+    }
+
+    setCollapsedDirectories((previous) => {
+      let changed = false;
+      const next = new Set(previous);
+      for (const path of expandedChain) {
+        if (next.delete(path)) {
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [selectedAudioPath, tree]);
+
+  const toggleDirectory = useCallback((relativePath: string) => {
+    setCollapsedDirectories((previous) => {
+      const next = new Set(previous);
+      if (next.has(relativePath)) {
+        next.delete(relativePath);
+      } else {
+        next.add(relativePath);
+      }
+      return next;
+    });
+  }, []);
+
   return (
     <div className="directory-tree">
+      <div className="directory-heading">资源管理器</div>
       <DirectoryNode
         node={tree}
         depth={0}
@@ -1345,6 +1788,8 @@ function DirectoryTreeView({
         dirtyPaths={dirtyPaths}
         savedPaths={savedPaths}
         entryOverrides={entryOverrides}
+        collapsedDirectories={collapsedDirectories}
+        onToggleDirectory={toggleDirectory}
         onSelect={onSelect}
       />
     </div>
@@ -1358,6 +1803,8 @@ function DirectoryNode({
   dirtyPaths,
   savedPaths,
   entryOverrides,
+  collapsedDirectories,
+  onToggleDirectory,
   onSelect,
 }: {
   node: CorpusDirectory;
@@ -1366,44 +1813,57 @@ function DirectoryNode({
   dirtyPaths: Set<string>;
   savedPaths: Set<string>;
   entryOverrides: Record<string, EntryOverlayState>;
+  collapsedDirectories: Set<string>;
+  onToggleDirectory: (relativePath: string) => void;
   onSelect: (entry: CorpusEntry) => void;
 }) {
+  const isRoot = depth === 0;
+  const relativePath = node.relativePath || node.name;
+  const isCollapsed = !isRoot && collapsedDirectories.has(relativePath);
+
   return (
     <div className="directory-node">
-      <div className="directory-title" style={{ paddingLeft: `${depth * 14}px` }}>
-        {depth === 0 ? "文件列表" : node.name}
-      </div>
+      {!isRoot ? (
+        <button
+          type="button"
+          className="directory-button"
+          style={{ paddingLeft: `${depth * 14}px` }}
+          onClick={() => onToggleDirectory(relativePath)}
+        >
+          <span className={isCollapsed ? "directory-caret" : "directory-caret expanded"}>
+            ▸
+          </span>
+          <span className="directory-name">{node.name}</span>
+        </button>
+      ) : null}
 
-      {node.entries.map((entry) => {
+      {!isCollapsed &&
+        node.entries.map((entry) => {
         const badge = getEntryState(entry, dirtyPaths, savedPaths, entryOverrides);
-        const csvPath = getDisplayCsvPath(entry, entryOverrides);
         return (
           <button
             key={entry.audioPath}
+            data-audio-path={entry.audioPath}
             className={
               entry.audioPath === selectedAudioPath
                 ? "tree-entry active"
                 : "tree-entry"
             }
-            style={{ paddingLeft: `${depth * 14 + 14}px` }}
+            style={{ paddingLeft: `${depth * 14 + (isRoot ? 10 : 28)}px` }}
             onClick={() => onSelect(entry)}
           >
-            <div>
+            <div className="tree-entry-main">
               <strong>{entry.stem}</strong>
-              <span>{entry.relativeDir || "当前目录"}</span>
             </div>
             <div className="entry-meta">
               <span className={`badge ${badge}`}>{getEntryStateLabel(badge)}</span>
-              <span>
-                {formatDurationLabel(entry.audioMeta.durationSec)} ·
-                {csvPath ? " 已有 CSV" : " 新建 CSV"}
-              </span>
             </div>
           </button>
         );
       })}
 
-      {node.directories.map((directory) => (
+      {!isCollapsed &&
+        node.directories.map((directory) => (
         <DirectoryNode
           key={directory.relativePath || directory.name}
           node={directory}
@@ -1412,9 +1872,11 @@ function DirectoryNode({
           dirtyPaths={dirtyPaths}
           savedPaths={savedPaths}
           entryOverrides={entryOverrides}
+          collapsedDirectories={collapsedDirectories}
+          onToggleDirectory={onToggleDirectory}
           onSelect={onSelect}
         />
-      ))}
+        ))}
     </div>
   );
 }
@@ -1425,6 +1887,7 @@ function WaveformPanel({
   timeRange,
   playheadSec,
   segments,
+  overlayGroups,
   heldTool,
   onSeek,
   onSetTimeRange,
@@ -1437,8 +1900,9 @@ function WaveformPanel({
   timeRange: TimeRange;
   playheadSec: number;
   segments: VadSegment[];
+  overlayGroups: SegmentOverlayGroups;
   heldTool: HeldTool;
-  onSeek: (secondsValue: number) => void;
+  onSeek: (secondsValue: number, shouldPlay?: boolean) => void;
   onSetTimeRange: (startSec: number, endSec: number) => void;
   onWheelZoom: (centerSec: number, factor: number) => void;
   onCommitSegment: (segment: VadSegment) => void;
@@ -1460,6 +1924,8 @@ function WaveformPanel({
   const [cursor, setCursor] = useState<"default" | "ew-resize">("default");
   const size = useElementSize(containerRef.current);
   const channelHeight = Math.max(size.height / Math.max(document.channelCount, 1), 1);
+  const visibleSpan = timeRange.endSec - timeRange.startSec;
+  const maxSliderStart = Math.max(document.durationSec - visibleSpan, 0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1498,7 +1964,7 @@ function WaveformPanel({
 
     drawSegmentOverlay(
       context,
-      segments,
+      overlayGroups.saved,
       timeRange,
       size.width,
       size.height,
@@ -1508,6 +1974,20 @@ function WaveformPanel({
         edgeStyle: waveformTheme.overlayBaseEdge,
       },
     );
+    if (overlayGroups.unsaved.length > 0) {
+      drawSegmentOverlay(
+        context,
+        overlayGroups.unsaved,
+        timeRange,
+        size.width,
+        size.height,
+        {
+          fillStyle: waveformTheme.overlayUnsaved,
+          outlineStyle: waveformTheme.overlayUnsavedEdge,
+          edgeStyle: waveformTheme.overlayUnsavedEdge,
+        },
+      );
+    }
     if (ghostSegment) {
       drawSegmentOverlay(
         context,
@@ -1561,6 +2041,7 @@ function WaveformPanel({
     document,
     ghostSegment,
     heldTool,
+    overlayGroups,
     playheadSec,
     segments,
     size.height,
@@ -1570,158 +2051,182 @@ function WaveformPanel({
   ]);
 
   return (
-    <div
-      ref={containerRef}
-      className="waveform-panel"
-      style={{ cursor }}
-      onWheel={(event) => {
-        event.preventDefault();
-        const rect = containerRef.current?.getBoundingClientRect();
-        if (!rect) {
-          return;
-        }
+    <div className="waveform-shell">
+      <div className="waveform-nav">
+        <input
+          className="waveform-nav-slider"
+          type="range"
+          min={0}
+          max={maxSliderStart}
+          step={Math.max(document.durationSec / 1000, 0.01)}
+          value={Math.min(timeRange.startSec, maxSliderStart)}
+          disabled={maxSliderStart <= 0}
+          onChange={(event) => {
+            const nextStart = Number(event.currentTarget.value);
+            onSetTimeRange(nextStart, nextStart + visibleSpan);
+          }}
+        />
+      </div>
 
-        const centerSec = getSecondsForClientX(event.clientX, rect, timeRange);
-        onWheelZoom(centerSec, event.deltaY > 0 ? 1.14 : 0.88);
-      }}
-      onPointerDown={(event) => {
-        if (!containerRef.current) {
-          return;
-        }
+      <div
+        ref={containerRef}
+        className="waveform-panel"
+        style={{ cursor }}
+        onWheel={(event) => {
+          event.preventDefault();
+          const rect = containerRef.current?.getBoundingClientRect();
+          if (!rect) {
+            return;
+          }
 
-        const rect = containerRef.current.getBoundingClientRect();
-        const selectionStartSec = getSecondsForClientX(
-          event.clientX,
-          rect,
-          timeRange,
-        );
-        const hit = heldTool
-          ? null
-          : getSegmentHit(selectionStartSec, rect.width, timeRange, segments);
+          const centerSec = getSecondsForClientX(event.clientX, rect, timeRange);
+          onWheelZoom(centerSec, event.deltaY > 0 ? 1.14 : 0.88);
+        }}
+        onPointerDown={(event) => {
+          if (!containerRef.current) {
+            return;
+          }
 
-        dragRef.current = {
-          mode:
-            hit?.part === "start" || hit?.part === "end"
-              ? "resize"
-              : heldTool
-                ? "edit"
-                : "pan",
-          startX: event.clientX,
-          originRange: timeRange,
-          selectionStartSec,
-          clickedSegmentStartSec: hit?.segment.startSec,
-          resizeEdge:
-            hit?.part === "start" || hit?.part === "end" ? hit.part : undefined,
-          segmentIndex: hit?.index,
-          sourceSegment: hit?.segment,
-        };
-        containerRef.current.setPointerCapture(event.pointerId);
-      }}
-      onPointerMove={(event) => {
-        if (!containerRef.current) {
-          return;
-        }
+          const rect = containerRef.current.getBoundingClientRect();
+          const selectionStartSec = getSecondsForClientX(
+            event.clientX,
+            rect,
+            timeRange,
+          );
+          const hit = heldTool || event.ctrlKey
+            ? null
+            : getSegmentHit(selectionStartSec, rect.width, timeRange, segments);
 
-        if (!dragRef.current) {
+          dragRef.current = {
+            mode:
+              hit?.part === "start" || hit?.part === "end"
+                ? "resize"
+                : heldTool || event.ctrlKey
+                  ? "edit"
+                  : "pan",
+            startX: event.clientX,
+            originRange: timeRange,
+            selectionStartSec,
+            clickedSegmentStartSec: hit?.segment.startSec,
+            resizeEdge:
+              hit?.part === "start" || hit?.part === "end" ? hit.part : undefined,
+            segmentIndex: hit?.index,
+            sourceSegment: hit?.segment,
+          };
+          containerRef.current.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          if (!containerRef.current) {
+            return;
+          }
+
+          if (!dragRef.current) {
+            const rect = containerRef.current.getBoundingClientRect();
+            const secondsValue = getSecondsForClientX(event.clientX, rect, timeRange);
+            const hit = heldTool
+              ? null
+              : getSegmentHit(secondsValue, rect.width, timeRange, segments);
+            setCursor(hit?.part === "start" || hit?.part === "end" ? "ew-resize" : "default");
+            return;
+          }
+
+          const rect = containerRef.current.getBoundingClientRect();
+          const drag = dragRef.current;
+          if (drag.mode === "pan") {
+            const deltaSec =
+              ((event.clientX - drag.startX) / rect.width) *
+              (drag.originRange.endSec - drag.originRange.startSec);
+            onSetTimeRange(
+              drag.originRange.startSec - deltaSec,
+              drag.originRange.endSec - deltaSec,
+            );
+            return;
+          }
+
+          const currentSec = getSecondsForClientX(event.clientX, rect, timeRange);
+          if (
+            drag.mode === "resize" &&
+            drag.sourceSegment &&
+            typeof drag.segmentIndex === "number" &&
+            drag.resizeEdge
+          ) {
+            setGhostSegment({
+              startSec:
+                drag.resizeEdge === "start"
+                  ? currentSec
+                  : drag.sourceSegment.startSec,
+              endSec:
+                drag.resizeEdge === "end" ? currentSec : drag.sourceSegment.endSec,
+            });
+            return;
+          }
+
+          setGhostSegment({
+            startSec: drag.selectionStartSec,
+            endSec: currentSec,
+          });
+        }}
+        onPointerUp={(event) => {
+          const drag = dragRef.current;
+          dragRef.current = null;
+          if (!drag || !containerRef.current) {
+            return;
+          }
+
           const rect = containerRef.current.getBoundingClientRect();
           const secondsValue = getSecondsForClientX(event.clientX, rect, timeRange);
-          const hit = heldTool
-            ? null
-            : getSegmentHit(secondsValue, rect.width, timeRange, segments);
-          setCursor(hit?.part === "start" || hit?.part === "end" ? "ew-resize" : "default");
-          return;
-        }
 
-        const rect = containerRef.current.getBoundingClientRect();
-        const drag = dragRef.current;
-        if (drag.mode === "pan") {
-          const deltaSec =
-            ((event.clientX - drag.startX) / rect.width) *
-            (drag.originRange.endSec - drag.originRange.startSec);
-          onSetTimeRange(
-            drag.originRange.startSec - deltaSec,
-            drag.originRange.endSec - deltaSec,
-          );
-          return;
-        }
-
-        const currentSec = getSecondsForClientX(event.clientX, rect, timeRange);
-        if (
-          drag.mode === "resize" &&
-          drag.sourceSegment &&
-          typeof drag.segmentIndex === "number" &&
-          drag.resizeEdge
-        ) {
-          setGhostSegment({
-            startSec:
-              drag.resizeEdge === "start"
-                ? currentSec
-                : drag.sourceSegment.startSec,
-            endSec:
-              drag.resizeEdge === "end" ? currentSec : drag.sourceSegment.endSec,
-          });
-          return;
-        }
-
-        setGhostSegment({
-          startSec: drag.selectionStartSec,
-          endSec: currentSec,
-        });
-      }}
-      onPointerUp={(event) => {
-        const drag = dragRef.current;
-        dragRef.current = null;
-        if (!drag || !containerRef.current) {
-          return;
-        }
-
-        const rect = containerRef.current.getBoundingClientRect();
-        const secondsValue = getSecondsForClientX(event.clientX, rect, timeRange);
-
-        if (drag.mode === "pan") {
-          if (Math.abs(event.clientX - drag.startX) < 3) {
-            onSeek(drag.clickedSegmentStartSec ?? secondsValue);
+          if (drag.mode === "pan") {
+            if (Math.abs(event.clientX - drag.startX) < 3) {
+              void onSeek(secondsValue, true);
+            }
+            return;
           }
-          return;
-        }
 
-        if (
-          drag.mode === "resize" &&
-          drag.sourceSegment &&
-          typeof drag.segmentIndex === "number" &&
-          drag.resizeEdge
-        ) {
-          setGhostSegment(null);
-          onAdjustSegment(drag.segmentIndex, {
-            startSec:
-              drag.resizeEdge === "start"
-                ? secondsValue
-                : drag.sourceSegment.startSec,
-            endSec:
-              drag.resizeEdge === "end" ? secondsValue : drag.sourceSegment.endSec,
-          });
-          setCursor("default");
-          return;
-        }
+          if (
+            drag.mode === "resize" &&
+            drag.sourceSegment &&
+            typeof drag.segmentIndex === "number" &&
+            drag.resizeEdge
+          ) {
+            setGhostSegment(null);
+            onAdjustSegment(drag.segmentIndex, {
+              startSec:
+                drag.resizeEdge === "start"
+                  ? secondsValue
+                  : drag.sourceSegment.startSec,
+              endSec:
+                drag.resizeEdge === "end" ? secondsValue : drag.sourceSegment.endSec,
+            });
+            setCursor("default");
+            return;
+          }
 
-        const segment = {
-          startSec: drag.selectionStartSec,
-          endSec: secondsValue,
-        };
-        setGhostSegment(null);
-        if (Math.abs(segment.endSec - segment.startSec) >= 0.01) {
-          onCommitSegment(segment);
-        }
-      }}
-      onPointerLeave={() => {
-        if (!dragRef.current) {
-          setCursor("default");
-        } else if (dragRef.current.mode === "edit" || dragRef.current.mode === "resize") {
+          if (Math.abs(event.clientX - drag.startX) < 3) {
+            setGhostSegment(null);
+            void onSeek(secondsValue, true);
+            return;
+          }
+
+          const segment = {
+            startSec: drag.selectionStartSec,
+            endSec: secondsValue,
+          };
           setGhostSegment(null);
-        }
-      }}
-    >
-      <canvas ref={canvasRef} />
+          if (Math.abs(segment.endSec - segment.startSec) >= 0.01) {
+            onCommitSegment(segment);
+          }
+        }}
+        onPointerLeave={() => {
+          if (!dragRef.current) {
+            setCursor("default");
+          } else if (dragRef.current.mode === "edit" || dragRef.current.mode === "resize") {
+            setGhostSegment(null);
+          }
+        }}
+      >
+        <canvas ref={canvasRef} />
+      </div>
     </div>
   );
 }
@@ -1735,6 +2240,7 @@ function SpectrogramPanel({
   frequencyScale,
   playheadSec,
   segments,
+  overlayGroups,
   heldTool,
   canvasTheme,
   onSeek,
@@ -1752,9 +2258,10 @@ function SpectrogramPanel({
   frequencyScale: FrequencyScale;
   playheadSec: number;
   segments: VadSegment[];
+  overlayGroups: SegmentOverlayGroups;
   heldTool: HeldTool;
   canvasTheme: ReturnType<typeof getCanvasTheme>;
-  onSeek: (secondsValue: number) => void;
+  onSeek: (secondsValue: number, shouldPlay?: boolean) => void;
   onSetTimeRange: (startSec: number, endSec: number) => void;
   onSetFrequencyRange: (minFreq: number, maxFreq: number) => void;
   onWheelZoom: (centerFreq: number, factor: number) => void;
@@ -1863,7 +2370,7 @@ function SpectrogramPanel({
 
     drawSegmentOverlay(
       context,
-      segments,
+      overlayGroups.saved,
       timeRange,
       size.width,
       size.height,
@@ -1873,6 +2380,20 @@ function SpectrogramPanel({
         edgeStyle: canvasTheme.overlayBaseEdge,
       },
     );
+    if (overlayGroups.unsaved.length > 0) {
+      drawSegmentOverlay(
+        context,
+        overlayGroups.unsaved,
+        timeRange,
+        size.width,
+        size.height,
+        {
+          fillStyle: canvasTheme.overlayUnsaved,
+          outlineStyle: canvasTheme.overlayUnsavedEdge,
+          edgeStyle: canvasTheme.overlayUnsavedEdge,
+        },
+      );
+    }
     if (ghostSegment) {
       drawSegmentOverlay(
         context,
@@ -1916,6 +2437,7 @@ function SpectrogramPanel({
     ghostSegment,
     heldTool,
     imageData,
+    overlayGroups,
     playheadSec,
     segments,
     size.height,
@@ -1935,11 +2457,28 @@ function SpectrogramPanel({
           return;
         }
 
-        const alpha = 1 - (event.clientY - rect.top) / rect.height;
-        const centerFreq =
-          frequencyRange.minFreq +
-          alpha * (frequencyRange.maxFreq - frequencyRange.minFreq);
-        onWheelZoom(centerFreq, event.deltaY > 0 ? 1.12 : 0.9);
+        if (event.ctrlKey) {
+          const alpha = 1 - (event.clientY - rect.top) / rect.height;
+          const centerFreq =
+            frequencyRange.minFreq +
+            alpha * (frequencyRange.maxFreq - frequencyRange.minFreq);
+          onWheelZoom(centerFreq, event.deltaY > 0 ? 1.12 : 0.9);
+          return;
+        }
+
+        const centerSec = getSecondsForClientX(event.clientX, rect, timeRange);
+        const span = timeRange.endSec - timeRange.startSec;
+        const nextSpan = clamp(
+          span * (event.deltaY > 0 ? 1.14 : 0.88),
+          MIN_TIME_WINDOW_SEC,
+          document.durationSec,
+        );
+        const nextRange = setWithinDuration(
+          centerSec - (centerSec - timeRange.startSec) * (nextSpan / span),
+          centerSec + (timeRange.endSec - centerSec) * (nextSpan / span),
+          document.durationSec,
+        );
+        onSetTimeRange(nextRange.startSec, nextRange.endSec);
       }}
       onPointerDown={(event) => {
         if (!containerRef.current) {
@@ -1952,7 +2491,7 @@ function SpectrogramPanel({
           rect,
           timeRange,
         );
-        const hit = heldTool
+        const hit = heldTool || event.ctrlKey
           ? null
           : getSegmentHit(selectionStartSec, rect.width, timeRange, segments);
 
@@ -1960,7 +2499,7 @@ function SpectrogramPanel({
           mode:
             hit?.part === "start" || hit?.part === "end"
               ? "resize"
-              : heldTool
+              : heldTool || event.ctrlKey
                 ? "edit"
                 : "pan",
           startX: event.clientX,
@@ -2049,7 +2588,7 @@ function SpectrogramPanel({
             Math.abs(event.clientX - drag.startX) < 3 &&
             Math.abs(event.clientY - drag.startY) < 3
           ) {
-            onSeek(drag.clickedSegmentStartSec ?? secondsValue);
+            void onSeek(secondsValue, true);
           }
           return;
         }
@@ -2070,6 +2609,15 @@ function SpectrogramPanel({
               drag.resizeEdge === "end" ? secondsValue : drag.sourceSegment.endSec,
           });
           setCursor("default");
+          return;
+        }
+
+        if (
+          Math.abs(event.clientX - drag.startX) < 3 &&
+          Math.abs(event.clientY - drag.startY) < 3
+        ) {
+          setGhostSegment(null);
+          void onSeek(secondsValue, true);
           return;
         }
 
