@@ -18,7 +18,15 @@ import {
 } from "./theme";
 import { useElementSize } from "./use-element-size";
 import { SpectrogramWorkerClient } from "./worker-client";
-import { MIN_FREQ_WINDOW_HZ, MIN_TIME_WINDOW_SEC } from "../shared/constants";
+import {
+  MIN_FREQ_WINDOW_HZ,
+  MIN_TIME_WINDOW_SEC,
+  MAX_FRONTEND_SAMPLE_RATE,
+  MAX_SPECTROGRAM_RENDER_HEIGHT,
+  MAX_SPECTROGRAM_RENDER_WIDTH,
+  SPECTROGRAM_RENDER_SCALE,
+} from "../shared/constants";
+import type { WaveformLevel } from "./audio";
 import type {
   CorpusDirectory,
   CorpusEntry,
@@ -44,7 +52,8 @@ type SegmentHitPart = "body" | "start" | "end";
 
 interface HydratedDocument extends LoadedAudioDocument {
   blobUrl: string;
-  channelData: Float32Array[];
+  waveformLevels: WaveformLevel[][];
+  waveformSampleRate: number;
   isDirty: boolean;
 }
 
@@ -67,6 +76,12 @@ interface SegmentHit {
   index: number;
   part: SegmentHitPart;
   segment: VadSegment;
+}
+
+interface SegmentOverlayStyle {
+  fillStyle: string;
+  outlineStyle: string;
+  edgeStyle: string;
 }
 
 function getDefaultTimeRange(durationSec: number): TimeRange {
@@ -340,6 +355,8 @@ export function App() {
   const [entryOverrides, setEntryOverrides] = useState<
     Record<string, EntryOverlayState>
   >({});
+  const loadRequestIdRef = useRef(0);
+  const loadAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     window.localStorage.setItem("labelau-ui-theme", uiThemePreference);
@@ -351,6 +368,7 @@ export function App() {
     audioRef.current.preload = "auto";
 
     return () => {
+      loadAbortRef.current?.abort();
       spectrogramWorkerRef.current?.dispose();
       audioRef.current?.pause();
       for (const document of cacheRef.current.values()) {
@@ -383,6 +401,7 @@ export function App() {
 
         URL.revokeObjectURL(evicted.blobUrl);
         cacheRef.current.delete(evictedPath);
+        spectrogramWorkerRef.current?.unloadDocument(evictedPath);
       }
     },
     [touchCache],
@@ -448,6 +467,11 @@ export function App() {
 
   const loadHydratedDocument = useCallback(
     async (audioPath: string) => {
+      const requestId = loadRequestIdRef.current + 1;
+      loadRequestIdRef.current = requestId;
+      loadAbortRef.current?.abort();
+      const abortController = new AbortController();
+      loadAbortRef.current = abortController;
       setIsLoadingDocument(true);
       setErrorMessage(null);
 
@@ -455,14 +479,9 @@ export function App() {
         const cached = cacheRef.current.get(audioPath);
         if (cached) {
           touchCache(audioPath);
-          spectrogramWorkerRef.current?.loadDocument(
-            cached.audioPath,
-            cached.channelData,
-            cached.sampleRate,
-          );
           setCurrentDocument(cached);
           setTimeRange(getDefaultTimeRange(cached.durationSec));
-          setFrequencyRange(getDefaultFrequencyRange(cached.sampleRate));
+          setFrequencyRange(getDefaultFrequencyRange(cached.waveformSampleRate));
           setSelectedChannel(0);
           setPlayheadSec(0);
           setIsPlaying(false);
@@ -475,26 +494,34 @@ export function App() {
         }
 
         const loaded = await bridge.loadDocument(audioPath);
-        const hydratedAudio = await hydrateAudio(loaded.audioUrl);
+        const hydratedAudio = await hydrateAudio(
+          loaded.audioUrl,
+          loaded.sampleRate,
+          abortController.signal,
+        );
+        if (abortController.signal.aborted || loadRequestIdRef.current !== requestId) {
+          URL.revokeObjectURL(hydratedAudio.blobUrl);
+          return;
+        }
         const document: HydratedDocument = {
           ...loaded,
-          sampleRate: hydratedAudio.waveform.sampleRate,
-          channelCount: hydratedAudio.waveform.channelData.length,
+          channelCount: hydratedAudio.waveform.workerChannelData.length,
           durationSec: hydratedAudio.waveform.durationSec,
           blobUrl: hydratedAudio.blobUrl,
-          channelData: hydratedAudio.waveform.channelData,
+          waveformLevels: hydratedAudio.waveform.waveformLevels,
+          waveformSampleRate: hydratedAudio.waveform.sampleRate,
           isDirty: false,
         };
 
         cacheDocument(document);
         spectrogramWorkerRef.current?.loadDocument(
           document.audioPath,
-          document.channelData,
-          document.sampleRate,
+          hydratedAudio.waveform.workerChannelData,
+          document.waveformSampleRate,
         );
         setCurrentDocument(document);
         setTimeRange(getDefaultTimeRange(document.durationSec));
-        setFrequencyRange(getDefaultFrequencyRange(document.sampleRate));
+        setFrequencyRange(getDefaultFrequencyRange(document.waveformSampleRate));
         setSelectedChannel(0);
         setPlayheadSec(0);
         setIsPlaying(false);
@@ -505,9 +532,15 @@ export function App() {
           audioRef.current.currentTime = 0;
         }
       } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
         setErrorMessage(error instanceof Error ? error.message : "载入音频失败");
       } finally {
-        setIsLoadingDocument(false);
+        if (loadRequestIdRef.current === requestId) {
+          setIsLoadingDocument(false);
+          loadAbortRef.current = null;
+        }
       }
     },
     [bridge, cacheDocument, touchCache],
@@ -871,7 +904,7 @@ export function App() {
     visibleEntries,
   ]);
 
-  const currentNyquist = currentDocument ? currentDocument.sampleRate / 2 : 8000;
+  const currentNyquist = currentDocument ? currentDocument.waveformSampleRate / 2 : 8000;
   const currentSegments = currentDocument?.segments ?? [];
   const currentState = selectedEntry
     ? getEntryState(selectedEntry, dirtyPaths, savedPaths, entryOverrides)
@@ -1107,7 +1140,7 @@ export function App() {
 
               <div className="spectrogram-header">
                 <div className="channel-picker">
-                  {currentDocument.channelData.map((_, index) => (
+                  {Array.from({ length: currentDocument.channelCount }, (_, index) => (
                     <button
                       key={index}
                       className={index === selectedChannel ? "channel-chip active" : "channel-chip"}
@@ -1238,7 +1271,9 @@ export function App() {
             </span>
             {currentDocument ? (
               <span className="status-chip">
-                {currentDocument.sampleRate} Hz · {currentDocument.channelCount} 通道
+                原始 {currentDocument.sampleRate} Hz · 前端{" "}
+                {Math.min(currentDocument.sampleRate, MAX_FRONTEND_SAMPLE_RATE)} Hz ·{" "}
+                {currentDocument.channelCount} 通道
               </span>
             ) : null}
             <span className="status-chip">空格 播放 · S 保存 · M 标注 · E 擦除</span>
@@ -1445,12 +1480,33 @@ function WaveformPanel({
     context.fillStyle = waveformTheme.background;
     context.fillRect(0, 0, size.width, size.height);
 
+    document.waveformLevels.forEach((channelLevels, index) => {
+      const top = index * channelHeight;
+      context.fillStyle = index % 2 === 0 ? waveformTheme.laneEven : waveformTheme.laneOdd;
+      context.fillRect(0, top, size.width, channelHeight);
+      drawWaveform(
+        context,
+        channelLevels,
+        timeRange,
+        document.waveformSampleRate,
+        size.width,
+        channelHeight,
+        top,
+        waveformTheme.waveform,
+      );
+    });
+
     drawSegmentOverlay(
       context,
       segments,
       timeRange,
       size.width,
       size.height,
+      {
+        fillStyle: waveformTheme.overlayBase,
+        outlineStyle: waveformTheme.overlayBaseEdge,
+        edgeStyle: waveformTheme.overlayBaseEdge,
+      },
     );
     if (ghostSegment) {
       drawSegmentOverlay(
@@ -1459,24 +1515,22 @@ function WaveformPanel({
         timeRange,
         size.width,
         size.height,
-        heldTool === "erase" ? "rgba(224, 90, 55, 0.22)" : "rgba(61, 147, 92, 0.28)",
+        heldTool === "erase"
+          ? {
+              fillStyle: waveformTheme.overlayErase,
+              outlineStyle: waveformTheme.overlayEraseEdge,
+              edgeStyle: waveformTheme.overlayEraseEdge,
+            }
+          : {
+              fillStyle: waveformTheme.overlayMark,
+              outlineStyle: waveformTheme.overlayMarkEdge,
+              edgeStyle: waveformTheme.overlayMarkEdge,
+            },
       );
     }
 
-    document.channelData.forEach((channelData, index) => {
+    document.waveformLevels.forEach((_, index) => {
       const top = index * channelHeight;
-      context.fillStyle = index % 2 === 0 ? waveformTheme.laneEven : waveformTheme.laneOdd;
-      context.fillRect(0, top, size.width, channelHeight);
-      drawWaveform(
-        context,
-        channelData,
-        timeRange,
-        document.sampleRate,
-        size.width,
-        channelHeight,
-        top,
-        waveformTheme.waveform,
-      );
       context.fillStyle = waveformTheme.label;
       context.font = "12px 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif";
       context.fillText(
@@ -1731,13 +1785,23 @@ function SpectrogramPanel({
       return;
     }
 
+    const renderWidth = getSpectrogramRenderDimension(
+      size.width,
+      SPECTROGRAM_RENDER_SCALE,
+      MAX_SPECTROGRAM_RENDER_WIDTH,
+    );
+    const renderHeight = getSpectrogramRenderDimension(
+      size.height,
+      SPECTROGRAM_RENDER_SCALE,
+      MAX_SPECTROGRAM_RENDER_HEIGHT,
+    );
     let cancelled = false;
     void worker
       .render({
         documentId: document.audioPath,
         channelIndex: selectedChannel,
-        width: Math.max(Math.floor(size.width), 1),
-        height: Math.max(Math.floor(size.height), 1),
+        width: renderWidth,
+        height: renderHeight,
         startSec: timeRange.startSec,
         endSec: timeRange.endSec,
         minFreq: frequencyRange.minFreq,
@@ -1787,6 +1851,8 @@ function SpectrogramPanel({
     context.fillRect(0, 0, size.width, size.height);
 
     if (imageData) {
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "medium";
       const bitmapCanvas = window.document.createElement("canvas");
       bitmapCanvas.width = imageData.width;
       bitmapCanvas.height = imageData.height;
@@ -1801,7 +1867,11 @@ function SpectrogramPanel({
       timeRange,
       size.width,
       size.height,
-      canvasTheme.overlayBase,
+      {
+        fillStyle: canvasTheme.overlayBase,
+        outlineStyle: canvasTheme.overlayBaseEdge,
+        edgeStyle: canvasTheme.overlayBaseEdge,
+      },
     );
     if (ghostSegment) {
       drawSegmentOverlay(
@@ -1811,8 +1881,16 @@ function SpectrogramPanel({
         size.width,
         size.height,
         heldTool === "erase"
-          ? canvasTheme.overlayErase
-          : canvasTheme.overlayMark,
+          ? {
+              fillStyle: canvasTheme.overlayErase,
+              outlineStyle: canvasTheme.overlayEraseEdge,
+              edgeStyle: canvasTheme.overlayEraseEdge,
+            }
+          : {
+              fillStyle: canvasTheme.overlayMark,
+              outlineStyle: canvasTheme.overlayMarkEdge,
+              edgeStyle: canvasTheme.overlayMarkEdge,
+            },
       );
     }
     drawPlayhead(
@@ -2019,7 +2097,7 @@ function SpectrogramPanel({
 
 function drawWaveform(
   context: CanvasRenderingContext2D,
-  channelData: Float32Array,
+  waveformLevels: WaveformLevel[],
   timeRange: TimeRange,
   sampleRate: number,
   width: number,
@@ -2027,10 +2105,14 @@ function drawWaveform(
   top: number,
   strokeStyle = "#1d3c28",
 ) {
+  const level = pickWaveformLevel(
+    waveformLevels,
+    Math.max(((timeRange.endSec - timeRange.startSec) * sampleRate) / width, 1),
+  );
   const startSample = Math.max(Math.floor(timeRange.startSec * sampleRate), 0);
   const endSample = Math.min(
     Math.ceil(timeRange.endSec * sampleRate),
-    channelData.length,
+    level.min.length * level.samplesPerBin,
   );
   const samplesPerPixel = Math.max((endSample - startSample) / width, 1);
   const centerY = top + height / 2;
@@ -2041,20 +2123,21 @@ function drawWaveform(
 
   for (let x = 0; x < width; x += 1) {
     const sliceStart = Math.floor(startSample + x * samplesPerPixel);
-    const sliceEnd = Math.min(
-      Math.floor(sliceStart + samplesPerPixel),
-      channelData.length,
+    const sliceEnd = Math.min(Math.floor(sliceStart + samplesPerPixel), endSample);
+    const startBin = Math.floor(sliceStart / level.samplesPerBin);
+    const endBin = Math.max(
+      startBin + 1,
+      Math.ceil(sliceEnd / level.samplesPerBin),
     );
     let min = 1;
     let max = -1;
 
-    for (let index = sliceStart; index < sliceEnd; index += 1) {
-      const value = channelData[index];
-      if (value < min) {
-        min = value;
+    for (let index = startBin; index < endBin; index += 1) {
+      if (level.min[index] < min) {
+        min = level.min[index];
       }
-      if (value > max) {
-        max = value;
+      if (level.max[index] > max) {
+        max = level.max[index];
       }
     }
 
@@ -2067,16 +2150,44 @@ function drawWaveform(
   context.stroke();
 }
 
+function pickWaveformLevel(
+  waveformLevels: WaveformLevel[],
+  samplesPerPixel: number,
+): WaveformLevel {
+  let selected = waveformLevels[0];
+
+  for (const level of waveformLevels) {
+    if (level.samplesPerBin > samplesPerPixel) {
+      break;
+    }
+
+    selected = level;
+  }
+
+  return selected;
+}
+
+function getSpectrogramRenderDimension(
+  size: number,
+  scale: number,
+  maxSize: number,
+): number {
+  return Math.max(1, Math.min(Math.floor(size * scale), maxSize));
+}
+
 function drawSegmentOverlay(
   context: CanvasRenderingContext2D,
   segments: VadSegment[],
   timeRange: TimeRange,
   width: number,
   height: number,
-  fillStyle = "rgba(61, 147, 92, 0.18)",
+  style: SegmentOverlayStyle = {
+    fillStyle: "rgba(61, 147, 92, 0.18)",
+    outlineStyle: "rgba(227, 255, 236, 0.9)",
+    edgeStyle: "rgba(227, 255, 236, 1)",
+  },
 ) {
   const span = timeRange.endSec - timeRange.startSec;
-  context.fillStyle = fillStyle;
 
   for (const segment of segments) {
     const visibleStart = Math.max(segment.startSec, timeRange.startSec);
@@ -2087,7 +2198,29 @@ function drawSegmentOverlay(
 
     const x = ((visibleStart - timeRange.startSec) / span) * width;
     const segmentWidth = ((visibleEnd - visibleStart) / span) * width;
-    context.fillRect(x, 0, Math.max(segmentWidth, 1), height);
+    const clampedWidth = Math.max(segmentWidth, 1);
+    const left = Math.max(0, x);
+    const right = Math.min(width, x + clampedWidth);
+
+    context.fillStyle = style.fillStyle;
+    context.fillRect(left, 0, Math.max(right - left, 1), height);
+
+    context.strokeStyle = style.outlineStyle;
+    context.lineWidth = 1;
+    context.strokeRect(left + 0.5, 0.5, Math.max(right - left - 1, 0), Math.max(height - 1, 0));
+
+    context.strokeStyle = style.edgeStyle;
+    context.lineWidth = 1.125;
+    context.beginPath();
+    context.moveTo(left + 0.5, 0);
+    context.lineTo(left + 0.5, height);
+    context.moveTo(right - 0.5, 0);
+    context.lineTo(right - 0.5, height);
+    context.stroke();
+
+    context.fillStyle = style.edgeStyle;
+    context.fillRect(left, 0, Math.min(4, Math.max(right - left, 1)), height);
+    context.fillRect(Math.max(left, right - 4), 0, Math.min(4, Math.max(right - left, 1)), height);
   }
 }
 

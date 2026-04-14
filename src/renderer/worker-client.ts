@@ -5,8 +5,12 @@ type WorkerRequest =
   | {
       kind: "load-document";
       documentId: string;
-      channelData: Float32Array[];
+      channelData: Int8Array[];
       sampleRate: number;
+    }
+  | {
+      kind: "unload-document";
+      documentId: string;
     }
   | {
       kind: "render";
@@ -67,7 +71,7 @@ export class SpectrogramWorkerClient {
 
   loadDocument(
     documentId: string,
-    channelData: Float32Array[],
+    channelData: Int8Array[],
     sampleRate: number,
   ): void {
     const payload: WorkerRequest = {
@@ -77,7 +81,17 @@ export class SpectrogramWorkerClient {
       sampleRate,
     };
 
-    this.worker.postMessage(payload);
+    this.worker.postMessage(
+      payload,
+      channelData.map((channel) => channel.buffer),
+    );
+  }
+
+  unloadDocument(documentId: string): void {
+    this.worker.postMessage({
+      kind: "unload-document",
+      documentId,
+    } satisfies WorkerRequest);
   }
 
   render(request: Omit<Extract<WorkerRequest, { kind: "render" }>, "kind" | "requestId">) {

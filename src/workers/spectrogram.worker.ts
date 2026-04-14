@@ -12,7 +12,7 @@ import { clamp, lerp } from "../shared/math";
 import type { SystemThemeMode } from "../renderer/theme";
 
 interface WorkerDocument {
-  channelData: Float32Array[];
+  channelData: Int8Array[];
   sampleRate: number;
 }
 
@@ -20,8 +20,12 @@ type IncomingMessage =
   | {
       kind: "load-document";
       documentId: string;
-      channelData: Float32Array[];
+      channelData: Int8Array[];
       sampleRate: number;
+    }
+  | {
+      kind: "unload-document";
+      documentId: string;
     }
   | {
       kind: "render";
@@ -104,7 +108,7 @@ function frequencyForRow(
 }
 
 function createFrame(
-  channelData: Float32Array,
+  channelData: Int8Array,
   centerSample: number,
 ): Float32Array {
   const frame = new Float32Array(SPECTROGRAM_WINDOW_SIZE);
@@ -114,7 +118,7 @@ function createFrame(
     const sampleIndex = centerSample - half + index;
     const sample =
       sampleIndex >= 0 && sampleIndex < channelData.length
-        ? channelData[sampleIndex]
+        ? channelData[sampleIndex] / 127
         : 0;
     frame[index] = sample * hannWindow[index];
   }
@@ -222,10 +226,17 @@ function renderSpectrogram(
 self.onmessage = (event: MessageEvent<IncomingMessage>) => {
   const payload = event.data;
   if (payload.kind === "load-document") {
+    cache.clear();
     documents.set(payload.documentId, {
       channelData: payload.channelData,
       sampleRate: payload.sampleRate,
     });
+    return;
+  }
+
+  if (payload.kind === "unload-document") {
+    cache.clear();
+    documents.delete(payload.documentId);
     return;
   }
 

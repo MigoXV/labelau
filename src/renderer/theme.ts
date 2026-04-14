@@ -8,14 +8,18 @@ export interface CanvasTheme {
   mode: SystemThemeMode;
   spectrogramBackground: string;
   overlayBase: string;
+  overlayBaseEdge: string;
   overlayMark: string;
+  overlayMarkEdge: string;
   overlayErase: string;
+  overlayEraseEdge: string;
   playhead: string;
   frequencyLabel: string;
   frequencyGuide: string;
 }
 
 export interface WaveformTheme {
+  mode: SystemThemeMode;
   background: string;
   laneEven: string;
   laneOdd: string;
@@ -23,14 +27,23 @@ export interface WaveformTheme {
   label: string;
   grid: string;
   playhead: string;
+  overlayBase: string;
+  overlayBaseEdge: string;
+  overlayMark: string;
+  overlayMarkEdge: string;
+  overlayErase: string;
+  overlayEraseEdge: string;
 }
 
 const darkTheme: CanvasTheme = {
   mode: "dark",
   spectrogramBackground: "#09040f",
   overlayBase: "rgba(70, 197, 188, 0.16)",
+  overlayBaseEdge: "rgba(135, 255, 244, 0.96)",
   overlayMark: "rgba(70, 197, 188, 0.22)",
+  overlayMarkEdge: "rgba(151, 255, 247, 0.98)",
   overlayErase: "rgba(236, 111, 76, 0.22)",
+  overlayEraseEdge: "rgba(255, 183, 160, 0.98)",
   playhead: "#fff2dc",
   frequencyLabel: "rgba(255, 234, 210, 0.92)",
   frequencyGuide: "rgba(255, 234, 210, 0.12)",
@@ -40,8 +53,11 @@ const lightTheme: CanvasTheme = {
   mode: "light",
   spectrogramBackground: "#09040f",
   overlayBase: "rgba(24, 143, 160, 0.14)",
+  overlayBaseEdge: "rgba(170, 255, 255, 0.98)",
   overlayMark: "rgba(24, 143, 160, 0.22)",
+  overlayMarkEdge: "rgba(188, 255, 255, 0.98)",
   overlayErase: "rgba(207, 94, 63, 0.2)",
+  overlayEraseEdge: "rgba(255, 201, 182, 0.98)",
   playhead: "#fff2dc",
   frequencyLabel: "rgba(255, 234, 210, 0.92)",
   frequencyGuide: "rgba(255, 234, 210, 0.12)",
@@ -54,6 +70,7 @@ export function getCanvasTheme(mode: SystemThemeMode): CanvasTheme {
 export function getWaveformTheme(mode: SystemThemeMode): WaveformTheme {
   if (mode === "dark") {
     return {
+      mode: "dark",
       background: "#0f0f0f",
       laneEven: "#151515",
       laneOdd: "#101010",
@@ -61,10 +78,17 @@ export function getWaveformTheme(mode: SystemThemeMode): WaveformTheme {
       label: "#e7decf",
       grid: "rgba(231, 222, 207, 0.12)",
       playhead: "#f0e6d7",
+      overlayBase: "rgba(86, 197, 154, 0.2)",
+      overlayBaseEdge: "rgba(207, 255, 219, 0.96)",
+      overlayMark: "rgba(86, 197, 154, 0.28)",
+      overlayMarkEdge: "rgba(214, 255, 225, 1)",
+      overlayErase: "rgba(229, 107, 84, 0.24)",
+      overlayEraseEdge: "rgba(255, 210, 197, 1)",
     };
   }
 
   return {
+    mode: "light",
     background: "#f3efe8",
     laneEven: "#f6f2eb",
     laneOdd: "#efe9df",
@@ -72,6 +96,12 @@ export function getWaveformTheme(mode: SystemThemeMode): WaveformTheme {
     label: "#6b5f53",
     grid: "rgba(78, 67, 58, 0.12)",
     playhead: "#ffffff",
+    overlayBase: "rgba(54, 160, 118, 0.18)",
+    overlayBaseEdge: "rgba(47, 104, 78, 0.92)",
+    overlayMark: "rgba(54, 160, 118, 0.26)",
+    overlayMarkEdge: "rgba(34, 87, 65, 0.96)",
+    overlayErase: "rgba(211, 96, 69, 0.22)",
+    overlayEraseEdge: "rgba(130, 55, 42, 0.92)",
   };
 }
 
