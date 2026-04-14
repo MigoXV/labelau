@@ -1,5 +1,9 @@
 export const APP_NAME = "LabelAU";
 export const SERVICE_PORT = 3777;
+export const MAX_FRONTEND_SAMPLE_RATE = 16000;
+export const SPECTROGRAM_RENDER_SCALE = 0.5;
+export const MAX_SPECTROGRAM_RENDER_WIDTH = 960;
+export const MAX_SPECTROGRAM_RENDER_HEIGHT = 480;
 export const SPECTROGRAM_FFT_SIZE = 1024;
 export const SPECTROGRAM_WINDOW_SIZE = 1024;
 export const MIN_TIME_WINDOW_SEC = 0.25;
