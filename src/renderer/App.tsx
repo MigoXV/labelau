@@ -479,6 +479,7 @@ export function App() {
   const [selectedChannel, setSelectedChannel] = useState(0);
   const [playheadSec, setPlayheadSec] = useState(0);
   const [playbackRate, setPlaybackRate] = useState<PlaybackRate>(1);
+  const [selectedSegmentKey, setSelectedSegmentKey] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [isLoadingDocument, setIsLoadingDocument] = useState(false);
@@ -737,6 +738,7 @@ export function App() {
   useEffect(() => {
     if (!selectedAudioPath) {
       setCurrentDocument(null);
+      setSelectedSegmentKey(null);
       return;
     }
 
@@ -1258,6 +1260,23 @@ export function App() {
   const currentState = selectedEntry
     ? getEntryState(selectedEntry, dirtyPaths, savedPaths, entryOverrides)
     : null;
+  const selectedSegment = useMemo(
+    () =>
+      selectedSegmentKey
+        ? currentSegments.find((segment) => getSegmentKey(segment) === selectedSegmentKey) ?? null
+        : null,
+    [currentSegments, selectedSegmentKey],
+  );
+
+  useEffect(() => {
+    if (!selectedSegmentKey) {
+      return;
+    }
+
+    if (!currentSegments.some((segment) => getSegmentKey(segment) === selectedSegmentKey)) {
+      setSelectedSegmentKey(null);
+    }
+  }, [currentSegments, selectedSegmentKey]);
 
   return (
     <div
@@ -1492,6 +1511,16 @@ export function App() {
                 label="状态"
                 value={currentState ? getEntryStateLabel(currentState) : "待开始"}
               />
+              {selectedSegment ? (
+                <>
+                  <Metric label="起始" value={formatSeconds(selectedSegment.startSec)} />
+                  <Metric
+                    label="持续"
+                    value={formatSeconds(selectedSegment.endSec - selectedSegment.startSec)}
+                  />
+                  <Metric label="结束" value={formatSeconds(selectedSegment.endSec)} />
+                </>
+              ) : null}
             </div>
 
             <ThemeControl
@@ -1545,6 +1574,9 @@ export function App() {
                   )
                 }
                 onAdjustSegment={adjustSegment}
+                onSelectSegment={(segment) =>
+                  setSelectedSegmentKey(segment ? getSegmentKey(segment) : null)
+                }
               />
               <div
                 className="editor-resizer"
@@ -1629,6 +1661,9 @@ export function App() {
                     )
                   }
                   onAdjustSegment={adjustSegment}
+                  onSelectSegment={(segment) =>
+                    setSelectedSegmentKey(segment ? getSegmentKey(segment) : null)
+                  }
                 />
               </div>
             </>
@@ -1894,6 +1929,7 @@ function WaveformPanel({
   onWheelZoom,
   onCommitSegment,
   onAdjustSegment,
+  onSelectSegment,
 }: {
   document: HydratedDocument;
   waveformTheme: ReturnType<typeof getWaveformTheme>;
@@ -1907,9 +1943,12 @@ function WaveformPanel({
   onWheelZoom: (centerSec: number, factor: number) => void;
   onCommitSegment: (segment: VadSegment) => void;
   onAdjustSegment: (segmentIndex: number, segment: VadSegment) => void;
+  onSelectSegment: (segment: VadSegment | null) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const overviewRef = useRef<HTMLDivElement | null>(null);
+  const overviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const dragRef = useRef<{
     mode: "pan" | "edit" | "resize";
     startX: number;
@@ -1920,12 +1959,16 @@ function WaveformPanel({
     segmentIndex?: number;
     sourceSegment?: VadSegment;
   } | null>(null);
+  const overviewDragRef = useRef<{
+    pointerId: number;
+    anchorOffsetSec: number;
+  } | null>(null);
   const [ghostSegment, setGhostSegment] = useState<VadSegment | null>(null);
   const [cursor, setCursor] = useState<"default" | "ew-resize">("default");
   const size = useElementSize(containerRef.current);
+  const overviewSize = useElementSize(overviewRef.current);
   const channelHeight = Math.max(size.height / Math.max(document.channelCount, 1), 1);
   const visibleSpan = timeRange.endSec - timeRange.startSec;
-  const maxSliderStart = Math.max(document.durationSec - visibleSpan, 0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -2050,22 +2093,157 @@ function WaveformPanel({
     waveformTheme,
   ]);
 
+  useEffect(() => {
+    const canvas = overviewCanvasRef.current;
+    if (!canvas || overviewSize.width === 0 || overviewSize.height === 0) {
+      return;
+    }
+
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(overviewSize.width * devicePixelRatio);
+    canvas.height = Math.floor(overviewSize.height * devicePixelRatio);
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+
+    context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    context.clearRect(0, 0, overviewSize.width, overviewSize.height);
+    context.fillStyle = waveformTheme.laneOdd;
+    context.fillRect(0, 0, overviewSize.width, overviewSize.height);
+
+    const overviewRange = {
+      startSec: 0,
+      endSec: document.durationSec,
+    };
+    drawWaveform(
+      context,
+      document.waveformLevels[0] ?? [],
+      overviewRange,
+      document.waveformSampleRate,
+      overviewSize.width,
+      overviewSize.height,
+      0,
+      waveformTheme.waveform,
+    );
+
+    context.fillStyle = "rgba(8, 10, 14, 0.18)";
+    context.fillRect(0, 0, overviewSize.width, overviewSize.height);
+
+    const maskLeft =
+      (timeRange.startSec / Math.max(document.durationSec, MIN_TIME_WINDOW_SEC)) *
+      overviewSize.width;
+    const maskWidth =
+      ((timeRange.endSec - timeRange.startSec) /
+        Math.max(document.durationSec, MIN_TIME_WINDOW_SEC)) *
+      overviewSize.width;
+
+    context.fillStyle = waveformTheme.overlayUnsaved;
+    context.fillRect(maskLeft, 0, Math.max(maskWidth, 1), overviewSize.height);
+    context.strokeStyle = waveformTheme.overlayUnsavedEdge;
+    context.lineWidth = 1;
+    context.strokeRect(
+      maskLeft + 0.5,
+      0.5,
+      Math.max(maskWidth - 1, 0),
+      Math.max(overviewSize.height - 1, 0),
+    );
+
+    context.strokeStyle = waveformTheme.playhead;
+    context.lineWidth = 1;
+    const playheadX =
+      (playheadSec / Math.max(document.durationSec, MIN_TIME_WINDOW_SEC)) *
+      overviewSize.width;
+    context.beginPath();
+    context.moveTo(playheadX + 0.5, 0);
+    context.lineTo(playheadX + 0.5, overviewSize.height);
+    context.stroke();
+  }, [
+    document.durationSec,
+    document.waveformLevels,
+    document.waveformSampleRate,
+    overviewSize.height,
+    overviewSize.width,
+    playheadSec,
+    timeRange.endSec,
+    timeRange.startSec,
+    waveformTheme,
+  ]);
+
   return (
     <div className="waveform-shell">
-      <div className="waveform-nav">
-        <input
-          className="waveform-nav-slider"
-          type="range"
-          min={0}
-          max={maxSliderStart}
-          step={Math.max(document.durationSec / 1000, 0.01)}
-          value={Math.min(timeRange.startSec, maxSliderStart)}
-          disabled={maxSliderStart <= 0}
-          onChange={(event) => {
-            const nextStart = Number(event.currentTarget.value);
-            onSetTimeRange(nextStart, nextStart + visibleSpan);
-          }}
-        />
+      <div
+        ref={overviewRef}
+        className="waveform-nav"
+        onPointerDown={(event) => {
+          if (!overviewRef.current) {
+            return;
+          }
+
+          const rect = overviewRef.current.getBoundingClientRect();
+          const clickedSec =
+            clamp((event.clientX - rect.left) / Math.max(rect.width, 1), 0, 1) *
+            document.durationSec;
+          const maskStartX =
+            (timeRange.startSec / Math.max(document.durationSec, MIN_TIME_WINDOW_SEC)) *
+            rect.width;
+          const maskWidth =
+            ((timeRange.endSec - timeRange.startSec) /
+              Math.max(document.durationSec, MIN_TIME_WINDOW_SEC)) *
+            rect.width;
+          const insideMask =
+            event.clientX >= rect.left + maskStartX &&
+            event.clientX <= rect.left + maskStartX + maskWidth;
+          const anchorOffsetSec = insideMask
+            ? clickedSec - timeRange.startSec
+            : visibleSpan / 2;
+
+          overviewDragRef.current = {
+            pointerId: event.pointerId,
+            anchorOffsetSec,
+          };
+          overviewRef.current.setPointerCapture(event.pointerId);
+          const nextStart = clamp(
+            clickedSec - anchorOffsetSec,
+            0,
+            Math.max(document.durationSec - visibleSpan, 0),
+          );
+          onSetTimeRange(nextStart, nextStart + visibleSpan);
+        }}
+        onPointerMove={(event) => {
+          if (
+            !overviewRef.current ||
+            !overviewDragRef.current ||
+            overviewDragRef.current.pointerId !== event.pointerId
+          ) {
+            return;
+          }
+
+          const rect = overviewRef.current.getBoundingClientRect();
+          const currentSec =
+            clamp((event.clientX - rect.left) / Math.max(rect.width, 1), 0, 1) *
+            document.durationSec;
+          const nextStart = clamp(
+            currentSec - overviewDragRef.current.anchorOffsetSec,
+            0,
+            Math.max(document.durationSec - visibleSpan, 0),
+          );
+          onSetTimeRange(nextStart, nextStart + visibleSpan);
+        }}
+        onPointerUp={(event) => {
+          if (
+            !overviewRef.current ||
+            !overviewDragRef.current ||
+            overviewDragRef.current.pointerId !== event.pointerId
+          ) {
+            return;
+          }
+
+          overviewDragRef.current = null;
+          overviewRef.current.releasePointerCapture(event.pointerId);
+        }}
+      >
+        <canvas ref={overviewCanvasRef} className="waveform-overview-canvas" />
       </div>
 
       <div
@@ -2175,9 +2353,11 @@ function WaveformPanel({
 
           const rect = containerRef.current.getBoundingClientRect();
           const secondsValue = getSecondsForClientX(event.clientX, rect, timeRange);
+          const clickHit = getSegmentHit(secondsValue, rect.width, timeRange, segments);
 
           if (drag.mode === "pan") {
             if (Math.abs(event.clientX - drag.startX) < 3) {
+              onSelectSegment(clickHit?.segment ?? null);
               void onSeek(secondsValue, true);
             }
             return;
@@ -2190,20 +2370,23 @@ function WaveformPanel({
             drag.resizeEdge
           ) {
             setGhostSegment(null);
-            onAdjustSegment(drag.segmentIndex, {
+            const nextSegment = {
               startSec:
                 drag.resizeEdge === "start"
                   ? secondsValue
                   : drag.sourceSegment.startSec,
               endSec:
                 drag.resizeEdge === "end" ? secondsValue : drag.sourceSegment.endSec,
-            });
+            };
+            onAdjustSegment(drag.segmentIndex, nextSegment);
+            onSelectSegment(nextSegment);
             setCursor("default");
             return;
           }
 
           if (Math.abs(event.clientX - drag.startX) < 3) {
             setGhostSegment(null);
+            onSelectSegment(clickHit?.segment ?? null);
             void onSeek(secondsValue, true);
             return;
           }
@@ -2215,6 +2398,7 @@ function WaveformPanel({
           setGhostSegment(null);
           if (Math.abs(segment.endSec - segment.startSec) >= 0.01) {
             onCommitSegment(segment);
+            onSelectSegment(segment);
           }
         }}
         onPointerLeave={() => {
@@ -2249,6 +2433,7 @@ function SpectrogramPanel({
   onWheelZoom,
   onCommitSegment,
   onAdjustSegment,
+  onSelectSegment,
 }: {
   worker: SpectrogramWorkerClient | null;
   document: HydratedDocument;
@@ -2267,6 +2452,7 @@ function SpectrogramPanel({
   onWheelZoom: (centerFreq: number, factor: number) => void;
   onCommitSegment: (segment: VadSegment) => void;
   onAdjustSegment: (segmentIndex: number, segment: VadSegment) => void;
+  onSelectSegment: (segment: VadSegment | null) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -2582,12 +2768,14 @@ function SpectrogramPanel({
 
         const rect = containerRef.current.getBoundingClientRect();
         const secondsValue = getSecondsForClientX(event.clientX, rect, timeRange);
+        const clickHit = getSegmentHit(secondsValue, rect.width, timeRange, segments);
 
         if (drag.mode === "pan") {
           if (
             Math.abs(event.clientX - drag.startX) < 3 &&
             Math.abs(event.clientY - drag.startY) < 3
           ) {
+            onSelectSegment(clickHit?.segment ?? null);
             void onSeek(secondsValue, true);
           }
           return;
@@ -2600,14 +2788,16 @@ function SpectrogramPanel({
           drag.resizeEdge
         ) {
           setGhostSegment(null);
-          onAdjustSegment(drag.segmentIndex, {
+          const nextSegment = {
             startSec:
               drag.resizeEdge === "start"
                 ? secondsValue
                 : drag.sourceSegment.startSec,
             endSec:
               drag.resizeEdge === "end" ? secondsValue : drag.sourceSegment.endSec,
-          });
+          };
+          onAdjustSegment(drag.segmentIndex, nextSegment);
+          onSelectSegment(nextSegment);
           setCursor("default");
           return;
         }
@@ -2617,6 +2807,7 @@ function SpectrogramPanel({
           Math.abs(event.clientY - drag.startY) < 3
         ) {
           setGhostSegment(null);
+          onSelectSegment(clickHit?.segment ?? null);
           void onSeek(secondsValue, true);
           return;
         }
@@ -2628,6 +2819,7 @@ function SpectrogramPanel({
         setGhostSegment(null);
         if (Math.abs(segment.endSec - segment.startSec) >= 0.01) {
           onCommitSegment(segment);
+          onSelectSegment(segment);
         }
       }}
       onPointerLeave={() => {
