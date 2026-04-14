@@ -50,7 +50,7 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width, 320px) 8px minmax(0, 1fr);
   width: 100%;
   height: 100dvh;
   max-height: 100dvh;
@@ -77,6 +77,23 @@ button {
   flex-direction: column;
   padding: 12px;
   gap: 10px;
+}
+
+.sidebar-resizer,
+.editor-resizer {
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  transition: background-color 0.16s ease;
+}
+
+.sidebar-resizer:hover,
+.editor-resizer:hover {
+  background: rgba(15, 23, 42, 0.16);
+}
+
+.sidebar-resizer {
+  width: 8px;
+  cursor: ew-resize;
 }
 
 .sidebar-header,
@@ -154,6 +171,11 @@ button {
 .ghost-button {
   padding: 7px 10px;
   background: transparent;
+}
+
+.toolbar-toggle {
+  min-width: 120px;
+  font-weight: 600;
 }
 
 .path-card,
@@ -245,10 +267,23 @@ button {
 .filter-header {
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.filter-header-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .filter-count {
   color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.compact-button {
+  padding: 5px 8px;
   font-size: 12px;
 }
 
@@ -284,6 +319,21 @@ button {
   border-radius: var(--radius-md);
   padding: 8px 10px;
   background: transparent;
+  text-align: left;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    transform 0.16s ease;
+}
+
+.summary-tile:hover {
+  border-color: rgba(15, 23, 42, 0.16);
+  transform: translateY(-1px);
+}
+
+.summary-tile-active {
+  background: var(--accent-soft);
+  border-color: rgba(15, 23, 42, 0.14);
 }
 
 .summary-tile span {
@@ -314,17 +364,57 @@ button {
   gap: 4px;
 }
 
+.directory-heading {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 8px 6px;
+}
+
 .directory-node {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.directory-title {
+.directory-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.directory-button:hover {
+  background: rgba(15, 23, 42, 0.04);
+}
+
+.directory-caret {
+  display: inline-flex;
+  width: 12px;
+  justify-content: center;
+  color: var(--text-tertiary);
+  transition: transform 0.14s ease;
+}
+
+.directory-caret.expanded {
+  transform: rotate(90deg);
+}
+
+.directory-name {
+  min-width: 0;
+  font-size: 12px;
   font-weight: 600;
-  padding-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tree-entry {
@@ -339,17 +429,38 @@ button {
 }
 
 .tree-entry.active {
-  background: rgba(15, 23, 42, 0.05);
-  border-color: rgba(15, 23, 42, 0.12);
+  background: rgba(36, 90, 141, 0.08);
+  border-color: rgba(36, 90, 141, 0.24);
 }
 
-.tree-entry strong {
+.tree-entry-main {
+  min-width: 0;
+}
+
+.tree-entry-main strong,
+.tree-entry-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-entry-main strong {
   display: block;
   color: var(--text-primary);
   font-weight: 600;
+  font-size: 13px;
+  line-height: 1.35;
 }
 
-.tree-entry span {
+.tree-entry.active strong {
+  color: #245a8d;
+}
+
+.tree-entry.active .tree-entry-main span {
+  color: rgba(36, 90, 141, 0.76);
+}
+
+.tree-entry-main span {
   display: block;
   color: var(--text-tertiary);
   font-size: 12px;
@@ -357,6 +468,11 @@ button {
 
 .entry-meta {
   text-align: right;
+}
+
+.entry-meta > span:not(.badge) {
+  display: block;
+  font-size: 13px;
 }
 
 .badge {
@@ -404,6 +520,12 @@ button {
 
 .toolbar-secondary {
   align-items: center;
+}
+
+.toolbar-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .toolbar-title {
@@ -502,8 +624,55 @@ button {
   border-radius: var(--radius-xl);
   padding: 12px;
   display: grid;
-  grid-template-rows: 220px auto minmax(0, 1fr);
+  grid-template-rows: var(--waveform-height, 256px) 8px minmax(0, 1fr);
   gap: 8px;
+}
+
+.waveform-shell {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+}
+
+.editor-resizer {
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.waveform-nav {
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-lg);
+  background: var(--panel-bg-strong);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.waveform-nav-meta {
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.waveform-nav-meta span {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.waveform-nav-meta strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.waveform-nav-slider {
+  flex: 1;
+  accent-color: var(--text-primary);
 }
 
 .waveform-panel,
@@ -534,6 +703,13 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+
+.spectrogram-shell {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -608,6 +784,10 @@ button {
 @media (max-width: 1200px) {
   .app-shell {
     grid-template-columns: 1fr;
+  }
+
+  .sidebar-resizer {
+    display: none;
   }
 
   .sidebar {

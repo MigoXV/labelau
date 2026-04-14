@@ -1,0 +1,18 @@
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.dockerfile
+    depends_on:
+      - service
+    ports:
+      - "8080:80"
+
+  service:
+    build:
+      context: .
+      dockerfile: docker/service.dockerfile
+    ports:
+      - "3777:3777"
+    volumes:
+      - ./data-bin:/data-bin
