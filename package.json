@@ -61,7 +61,12 @@
       "package.json"
     ],
     "directories": {
-      "buildResources": "assets"
+      "buildResources": "assets",
+      "output": "release"
+    },
+    "linux": {
+      "category": "Utility",
+      "maintainer": "LabelAU <noreply@labelau.local>"
     }
   }
 }
