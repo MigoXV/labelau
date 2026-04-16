@@ -7,11 +7,18 @@ import {
   dialog,
   ipcMain,
   protocol,
+  type MessageBoxOptions,
 } from "electron";
 
 import type { SaveAnnotationRequest } from "../shared/contracts";
 import { loadDocument, saveAnnotation } from "../host-core/documents";
 import { scanCorpus } from "../host-core/corpus";
+import {
+  getCloseDialogDetail,
+  mapCloseDialogResponse,
+} from "../shared/window-close";
+
+let allowWindowClose = false;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -26,6 +33,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 function createWindow(): BrowserWindow {
+  allowWindowClose = false;
   const mainWindow = new BrowserWindow({
     width: 1480,
     height: 960,
@@ -48,6 +56,19 @@ function createWindow(): BrowserWindow {
   } else {
     void mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
   }
+
+  mainWindow.on("close", (event) => {
+    if (allowWindowClose) {
+      return;
+    }
+
+    event.preventDefault();
+    mainWindow.webContents.send("app:onCloseRequested");
+  });
+
+  mainWindow.on("closed", () => {
+    allowWindowClose = false;
+  });
 
   return mainWindow;
 }
@@ -99,6 +120,34 @@ async function registerIpcHandlers(): Promise<void> {
       return saveAnnotation(request);
     },
   );
+
+  ipcMain.handle("app:confirmClose", async (event, dirtyCount: number) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options: MessageBoxOptions = {
+      type: "warning",
+      buttons: ["保存并退出", "不保存退出", "取消"],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+      message: "存在未保存修改",
+      detail: getCloseDialogDetail(dirtyCount),
+    };
+    const result = window
+      ? await dialog.showMessageBox(window, options)
+      : await dialog.showMessageBox(options);
+
+    return mapCloseDialogResponse(result.response);
+  });
+
+  ipcMain.handle("app:completeClose", async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) {
+      return;
+    }
+
+    allowWindowClose = true;
+    window.close();
+  });
 }
 
 app.whenReady().then(async () => {

@@ -4,7 +4,8 @@ import { readdir } from "node:fs/promises";
 import type {
   CorpusDirectory,
   CorpusEntry,
-  CorpusEntryTree,
+  ScanDirectoryResult,
+  ScanWarning,
 } from "../shared/contracts";
 
 import { readWavMetadata } from "./wav";
@@ -12,6 +13,11 @@ import { readWavMetadata } from "./wav";
 interface DirectoryPairing {
   wavs: Map<string, string>;
   csvs: Map<string, string>;
+}
+
+interface DirectoryScanResult {
+  tree: CorpusDirectory | null;
+  warnings: ScanWarning[];
 }
 
 function sortEntries(entries: CorpusEntry[]): CorpusEntry[] {
@@ -24,10 +30,29 @@ function sortDirectories(directories: CorpusDirectory[]): CorpusDirectory[] {
   return [...directories].sort((left, right) => left.name.localeCompare(right.name));
 }
 
+function sortWarnings(warnings: ScanWarning[]): ScanWarning[] {
+  return [...warnings].sort((left, right) =>
+    left.audioPath.localeCompare(right.audioPath),
+  );
+}
+
+function normalizeWavReadError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message.startsWith("Unsupported WAV file:")) {
+    return "不支持的 WAV 文件";
+  }
+
+  if (message.startsWith("Incomplete WAV metadata:")) {
+    return "WAV 元数据不完整";
+  }
+
+  return "读取音频元数据失败";
+}
+
 async function buildDirectoryTree(
   rootPath: string,
   currentPath: string,
-): Promise<CorpusDirectory | null> {
+): Promise<DirectoryScanResult> {
   const children = await readdir(currentPath, { withFileTypes: true });
   const pairing: DirectoryPairing = {
     wavs: new Map(),
@@ -35,13 +60,15 @@ async function buildDirectoryTree(
   };
 
   const directories: CorpusDirectory[] = [];
+  const warnings: ScanWarning[] = [];
 
   for (const child of children) {
     const absolutePath = path.join(currentPath, child.name);
     if (child.isDirectory()) {
       const nested = await buildDirectoryTree(rootPath, absolutePath);
-      if (nested) {
-        directories.push(nested);
+      warnings.push(...nested.warnings);
+      if (nested.tree) {
+        directories.push(nested.tree);
       }
       continue;
     }
@@ -59,12 +86,13 @@ async function buildDirectoryTree(
     }
   }
 
-  const entries = await Promise.all(
-    [...pairing.wavs.entries()].map(async ([stem, audioPath]) => {
+  const entries: CorpusEntry[] = [];
+  for (const [stem, audioPath] of pairing.wavs.entries()) {
+    try {
       const csvPath = pairing.csvs.get(stem) ?? null;
       const metadata = await readWavMetadata(audioPath);
       const relativeDir = path.relative(rootPath, currentPath);
-      return {
+      entries.push({
         audioPath,
         csvPath,
         relativeDir: relativeDir === "" ? "." : relativeDir,
@@ -72,38 +100,52 @@ async function buildDirectoryTree(
         hasAnnotation: Boolean(csvPath),
         isDirty: false,
         audioMeta: metadata,
-      } satisfies CorpusEntry;
-    }),
-  );
+      });
+    } catch (error) {
+      warnings.push({
+        audioPath,
+        stem,
+        reason: normalizeWavReadError(error),
+      });
+    }
+  }
 
   const filteredEntries = sortEntries(entries);
   const filteredDirectories = sortDirectories(directories);
+  const sortedWarnings = sortWarnings(warnings);
 
   if (filteredEntries.length === 0 && filteredDirectories.length === 0) {
-    return null;
-  }
-
-  return {
-    name: path.basename(currentPath),
-    relativePath: path.relative(rootPath, currentPath),
-    directories: filteredDirectories,
-    entries: filteredEntries,
-  };
-}
-
-export async function scanCorpus(rootPath: string): Promise<CorpusEntryTree> {
-  const tree = await buildDirectoryTree(rootPath, rootPath);
-  if (!tree) {
     return {
-      name: path.basename(rootPath),
-      relativePath: "",
-      directories: [],
-      entries: [],
+      tree: null,
+      warnings: sortedWarnings,
     };
   }
 
   return {
-    ...tree,
-    relativePath: "",
+    tree: {
+      name: path.basename(currentPath),
+      relativePath: path.relative(rootPath, currentPath),
+      directories: filteredDirectories,
+      entries: filteredEntries,
+    },
+    warnings: sortedWarnings,
+  };
+}
+
+export async function scanCorpus(rootPath: string): Promise<ScanDirectoryResult> {
+  const { tree, warnings } = await buildDirectoryTree(rootPath, rootPath);
+  return {
+    tree: tree
+      ? {
+          ...tree,
+          relativePath: "",
+        }
+      : {
+          name: path.basename(rootPath),
+          relativePath: "",
+          directories: [],
+          entries: [],
+        },
+    warnings,
   };
 }

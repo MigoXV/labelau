@@ -36,8 +36,8 @@ app.post("/api/scanDirectory", async (request, response) => {
       return;
     }
 
-    const tree = await scanCorpus(rootPath);
-    response.json(tree);
+    const result = await scanCorpus(rootPath);
+    response.json(result);
   } catch (error) {
     response.status(500).json({
       error: error instanceof Error ? error.message : "Failed to scan directory",

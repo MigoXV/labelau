@@ -1,7 +1,7 @@
 import type {
-  CorpusEntryTree,
   HostBridge,
   LoadedAudioDocument,
+  ScanDirectoryResult,
   SaveAnnotationRequest,
   SaveAnnotationResult,
 } from "../../shared/contracts";
@@ -83,7 +83,7 @@ export const browserHostBridge: HostBridge = {
     return directory?.trim() ? directory.trim() : null;
   },
   scanDirectory(rootPath: string) {
-    return postJson<CorpusEntryTree>("/api/scanDirectory", { rootPath });
+    return postJson<ScanDirectoryResult>("/api/scanDirectory", { rootPath });
   },
   async loadDocument(audioPath: string) {
     const document = await postJson<LoadedAudioDocument>("/api/loadDocument", {
@@ -100,4 +100,11 @@ export const browserHostBridge: HostBridge = {
   saveAnnotation(request: SaveAnnotationRequest) {
     return postJson<SaveAnnotationResult>("/api/saveAnnotation", request);
   },
+  onWindowCloseRequested() {
+    return () => undefined;
+  },
+  async confirmWindowClose() {
+    return "cancel";
+  },
+  async completeWindowClose() {},
 };
