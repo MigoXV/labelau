@@ -1,3 +1,5 @@
+import type { WindowCloseAction } from "./window-close";
+
 export type FrequencyScale = "linear" | "log";
 
 export interface AudioMeta {
@@ -31,6 +33,17 @@ export interface CorpusDirectory {
 
 export type CorpusEntryTree = CorpusDirectory;
 
+export interface ScanWarning {
+  audioPath: string;
+  stem: string;
+  reason: string;
+}
+
+export interface ScanDirectoryResult {
+  tree: CorpusEntryTree;
+  warnings: ScanWarning[];
+}
+
 export interface LoadedAudioDocument {
   audioPath: string;
   csvPath: string | null;
@@ -57,9 +70,12 @@ export interface SaveAnnotationResult {
 export interface HostBridge {
   mode: "browser" | "electron";
   pickDirectory(): Promise<string | null>;
-  scanDirectory(rootPath: string): Promise<CorpusEntryTree>;
+  scanDirectory(rootPath: string): Promise<ScanDirectoryResult>;
   loadDocument(audioPath: string): Promise<LoadedAudioDocument>;
   saveAnnotation(
     request: SaveAnnotationRequest,
   ): Promise<SaveAnnotationResult>;
+  onWindowCloseRequested(listener: () => void): () => void;
+  confirmWindowClose(dirtyCount: number): Promise<WindowCloseAction>;
+  completeWindowClose(): Promise<void>;
 }

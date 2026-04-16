@@ -10,6 +10,11 @@ import {
 import { hydrateAudio } from "./audio";
 import { getHostBridge } from "./bridge";
 import {
+  saveDirtyDocuments,
+  type DirtyDocumentForSave,
+} from "./close-flow";
+import { HELP_SECTIONS } from "../shared/help-content";
+import {
   buildUiThemeStyle,
   getCanvasTheme,
   getWaveformTheme,
@@ -487,6 +492,7 @@ export function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState("等待打开目录");
   const [heldTool, setHeldTool] = useState<HeldTool>(null);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(() => new Set());
   const [savedPaths, setSavedPaths] = useState<Set<string>>(() => new Set());
   const [entryOverrides, setEntryOverrides] = useState<
@@ -494,6 +500,7 @@ export function App() {
   >({});
   const loadRequestIdRef = useRef(0);
   const loadAbortRef = useRef<AbortController | null>(null);
+  const closeFlowInFlightRef = useRef(false);
 
   useEffect(() => {
     window.localStorage.setItem("labelau-ui-theme", uiThemePreference);
@@ -613,7 +620,7 @@ export function App() {
       setErrorMessage(null);
 
       try {
-        const nextTree = await bridge.scanDirectory(nextRootPath);
+        const { tree: nextTree, warnings } = await bridge.scanDirectory(nextRootPath);
         const flattened = flattenEntries(nextTree);
 
         setTree(nextTree);
@@ -622,6 +629,13 @@ export function App() {
           flattened.length > 0
             ? `已载入 ${flattened.length} 个可用音频`
             : "目录中未找到可导入的 WAV",
+        );
+        setErrorMessage(
+          warnings.length > 0
+            ? flattened.length > 0
+              ? `已载入 ${flattened.length} 个可用音频，跳过 ${warnings.length} 个不支持文件`
+              : `未发现可导入的 WAV，已跳过 ${warnings.length} 个不支持文件`
+            : null,
         );
 
         if (
@@ -846,20 +860,6 @@ export function App() {
     return () => window.cancelAnimationFrame(frame);
   }, [currentDocument, isPlaying]);
 
-  useEffect(() => {
-    const handler = (event: BeforeUnloadEvent) => {
-      if (dirtyPaths.size === 0) {
-        return;
-      }
-
-      event.preventDefault();
-      event.returnValue = "";
-    };
-
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, [dirtyPaths]);
-
   const togglePlayback = useCallback(async () => {
     if (!currentDocument || !audioRef.current) {
       return;
@@ -901,6 +901,115 @@ export function App() {
     [currentDocument],
   );
 
+  const commitSavedDocument = useCallback(
+    (audioPath: string, csvPath: string) => {
+      const cachedDocument = cacheRef.current.get(audioPath);
+      if (!cachedDocument) {
+        return;
+      }
+
+      const nextDocument: HydratedDocument = {
+        ...cachedDocument,
+        csvPath,
+        savedSegments: cloneSegments(cachedDocument.segments),
+        segmentHistory: [],
+        isDirty: false,
+      };
+
+      cacheDocument(nextDocument);
+      if (currentDocument?.audioPath === audioPath) {
+        setCurrentDocument(nextDocument);
+      }
+      setDirtyPaths((previous) => {
+        const next = new Set(previous);
+        next.delete(audioPath);
+        return next;
+      });
+      setSavedPaths((previous) => {
+        const next = new Set(previous);
+        next.add(audioPath);
+        return next;
+      });
+      setEntryOverrides((previous) => ({
+        ...previous,
+        [audioPath]: {
+          hasAnnotation: true,
+          csvPath,
+        },
+      }));
+    },
+    [cacheDocument, currentDocument?.audioPath],
+  );
+
+  const saveDocumentByPath = useCallback(
+    async (audioPath: string) => {
+      const document = cacheRef.current.get(audioPath);
+      if (!document) {
+        throw new Error(`缓存中找不到待保存文件：${audioPath}`);
+      }
+
+      const result = await bridge.saveAnnotation({
+        audioPath: document.audioPath,
+        csvPath: document.csvPath,
+        segments: document.segments,
+      });
+
+      commitSavedDocument(audioPath, result.csvPath);
+      return {
+        audioPath,
+        csvPath: result.csvPath,
+        stem: document.stem,
+      };
+    },
+    [bridge, commitSavedDocument],
+  );
+
+  const saveAllDirtyDocuments = useCallback(async () => {
+    const documentsByPath = new Map<string, DirtyDocumentForSave>();
+    for (const audioPath of dirtyPaths) {
+      const document = cacheRef.current.get(audioPath);
+      if (!document) {
+        continue;
+      }
+
+      documentsByPath.set(audioPath, {
+        audioPath: document.audioPath,
+        csvPath: document.csvPath,
+        segments: document.segments,
+        stem: document.stem,
+      });
+    }
+
+    setIsSaving(true);
+    setErrorMessage(null);
+
+    try {
+      const savedDocuments = await saveDirtyDocuments({
+        dirtyPaths,
+        documentsByPath,
+        saveAnnotation: bridge.saveAnnotation,
+        onSaved: ({ audioPath, csvPath }) => {
+          commitSavedDocument(audioPath, csvPath);
+        },
+      });
+
+      if (savedDocuments.length > 0) {
+        setStatusMessage(
+          savedDocuments.length === 1
+            ? `已保存 ${savedDocuments[0]?.stem}.csv`
+            : `已保存 ${savedDocuments.length} 个未保存文件`,
+        );
+      }
+
+      return savedDocuments;
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "保存失败");
+      throw error;
+    } finally {
+      setIsSaving(false);
+    }
+  }, [bridge.saveAnnotation, commitSavedDocument, dirtyPaths]);
+
   const saveCurrentDocument = useCallback(async () => {
     if (!currentDocument) {
       return;
@@ -910,43 +1019,51 @@ export function App() {
     setErrorMessage(null);
 
     try {
-      const result = await bridge.saveAnnotation({
-        audioPath: currentDocument.audioPath,
-        csvPath: currentDocument.csvPath,
-        segments: currentDocument.segments,
-      });
-
-      updateCurrentDocument((document) => ({
-        ...document,
-        csvPath: result.csvPath,
-        savedSegments: cloneSegments(document.segments),
-        segmentHistory: [],
-        isDirty: false,
-      }));
-      setDirtyPaths((previous) => {
-        const next = new Set(previous);
-        next.delete(currentDocument.audioPath);
-        return next;
-      });
-      setSavedPaths((previous) => {
-        const next = new Set(previous);
-        next.add(currentDocument.audioPath);
-        return next;
-      });
-      setEntryOverrides((previous) => ({
-        ...previous,
-        [currentDocument.audioPath]: {
-          hasAnnotation: true,
-          csvPath: result.csvPath,
-        },
-      }));
-      setStatusMessage(`已保存 ${currentDocument.stem}.csv`);
+      const savedDocument = await saveDocumentByPath(currentDocument.audioPath);
+      setStatusMessage(`已保存 ${savedDocument.stem}.csv`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "保存失败");
     } finally {
       setIsSaving(false);
     }
-  }, [bridge, currentDocument, updateCurrentDocument]);
+  }, [currentDocument, saveDocumentByPath]);
+
+  useEffect(() => {
+    if (bridge.mode !== "electron") {
+      return;
+    }
+
+    return bridge.onWindowCloseRequested(() => {
+      if (closeFlowInFlightRef.current) {
+        return;
+      }
+
+      closeFlowInFlightRef.current = true;
+      void (async () => {
+        try {
+          if (dirtyPaths.size === 0) {
+            await bridge.completeWindowClose();
+            return;
+          }
+
+          const action = await bridge.confirmWindowClose(dirtyPaths.size);
+          if (action === "cancel") {
+            return;
+          }
+
+          if (action === "save-and-exit") {
+            await saveAllDirtyDocuments();
+          }
+
+          await bridge.completeWindowClose();
+        } catch (error) {
+          setErrorMessage(error instanceof Error ? error.message : "关闭应用失败");
+        } finally {
+          closeFlowInFlightRef.current = false;
+        }
+      })();
+    });
+  }, [bridge, dirtyPaths, saveAllDirtyDocuments]);
 
   const updateSegments = useCallback(
     (updater: (segments: VadSegment[]) => VadSegment[]) => {
@@ -1122,7 +1239,29 @@ export function App() {
       : null;
 
   useEffect(() => {
+    if (!isHelpOpen) {
+      return;
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setIsHelpOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isHelpOpen]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isHelpOpen) {
+        return;
+      }
+
       const target = event.target as HTMLElement | null;
       const isTypingTarget =
         target?.tagName === "INPUT" ||
@@ -1239,6 +1378,7 @@ export function App() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [
+    isHelpOpen,
     undoLastChange,
     currentDocument,
     saveCurrentDocument,
@@ -1433,6 +1573,9 @@ export function App() {
             </div>
 
             <div className="toolbar-actions">
+              <button className="ghost-button" onClick={() => setIsHelpOpen(true)}>
+                帮助
+              </button>
               <button
                 className="ghost-button"
                 disabled={!previousEntry}
@@ -1721,6 +1864,50 @@ export function App() {
           {errorMessage ? <span className="error-text">{errorMessage}</span> : <span>{statusMessage}</span>}
         </footer>
       </main>
+
+      {isHelpOpen ? (
+        <div
+          className="help-overlay"
+          onClick={() => setIsHelpOpen(false)}
+          role="presentation"
+        >
+          <section
+            className="help-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="help-dialog-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="help-dialog-header">
+              <div>
+                <p className="eyebrow">客户帮助</p>
+                <h2 id="help-dialog-title">使用说明</h2>
+              </div>
+              <button className="ghost-button" onClick={() => setIsHelpOpen(false)}>
+                关闭
+              </button>
+            </div>
+
+            <div className="help-dialog-body">
+              {HELP_SECTIONS.map((section) => (
+                <section key={section.title} className="help-section">
+                  <h3>{section.title}</h3>
+                  {section.paragraphs?.map((paragraph) => (
+                    <p key={paragraph}>{paragraph}</p>
+                  ))}
+                  {section.bullets ? (
+                    <ul>
+                      {section.bullets.map((bullet) => (
+                        <li key={bullet}>{bullet}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </section>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
