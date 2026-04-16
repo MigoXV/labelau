@@ -27,3 +27,4 @@ yarn-error.log*
 # OS/editor noise
 .DS_Store
 Thumbs.db
+.tools/
