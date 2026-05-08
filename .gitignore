@@ -2,7 +2,7 @@ node_modules/
 tmp-workspace/
 data-bin/
 model-bin/
-
+outputs/
 # Build artifacts
 dist/
 dist-node/
