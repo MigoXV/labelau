@@ -4,6 +4,7 @@ import express from "express";
 
 import { SERVICE_PORT } from "../shared/constants";
 import type { SaveAnnotationRequest } from "../shared/contracts";
+import { getAudioMimeType } from "../shared/audio-format";
 
 import { scanCorpus } from "../host-core/corpus";
 import { loadDocument, saveAnnotation } from "../host-core/documents";
@@ -90,6 +91,7 @@ app.get("/api/audio", (request, response) => {
     return;
   }
 
+  response.type(getAudioMimeType(audioPath));
   response.sendFile(path.resolve(audioPath));
 });
 
