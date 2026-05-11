@@ -628,13 +628,13 @@ export function App() {
         setStatusMessage(
           flattened.length > 0
             ? `已载入 ${flattened.length} 个可用音频`
-            : "目录中未找到可导入的 WAV",
+            : "目录中未找到可导入的音频",
         );
         setErrorMessage(
           warnings.length > 0
             ? flattened.length > 0
               ? `已载入 ${flattened.length} 个可用音频，跳过 ${warnings.length} 个不支持文件`
-              : `未发现可导入的 WAV，已跳过 ${warnings.length} 个不支持文件`
+              : `未发现可导入的音频，已跳过 ${warnings.length} 个不支持文件`
             : null,
         );
 
@@ -1537,7 +1537,7 @@ export function App() {
               <p>
                 {rootPath
                   ? "调整搜索词或任务筛选，查看当前目录下的可标注音频。"
-                  : "打开目录后，系统会递归扫描 WAV，并自动匹配同目录同 stem 的 Audition CSV。"}
+                  : "打开目录后，系统会递归扫描 WAV、FLAC、MP3，并自动匹配同目录同 stem 的 Audition CSV。"}
               </p>
             </div>
           )}
@@ -1567,7 +1567,7 @@ export function App() {
                 <p className="toolbar-subtitle">
                   {rootPath
                     ? "左侧文件列表会展示当前目录下可工作的音频文件。"
-                    : "先打开一个包含 WAV 文件的目录，系统会自动恢复已有标注。"}
+                    : "先打开一个包含 WAV、FLAC 或 MP3 文件的目录，系统会自动恢复已有标注。"}
                 </p>
               ) : null}
             </div>
@@ -1817,7 +1817,7 @@ export function App() {
                   <p className="eyebrow">开始工作</p>
                   <h2>开始音频标注</h2>
                   <p>
-                    先打开一个包含 WAV 文件的目录，系统将自动扫描同名 CSV 并恢复已有标注。
+                    先打开一个包含 WAV、FLAC 或 MP3 文件的目录，系统将自动扫描同名 CSV 并恢复已有标注。
                   </p>
                   <button
                     className="action-button"

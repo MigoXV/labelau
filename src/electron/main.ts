@@ -11,6 +11,7 @@ import {
 } from "electron";
 
 import type { SaveAnnotationRequest } from "../shared/contracts";
+import { getAudioMimeType } from "../shared/audio-format";
 import { loadDocument, saveAnnotation } from "../host-core/documents";
 import { scanCorpus } from "../host-core/corpus";
 import {
@@ -88,7 +89,7 @@ async function registerProtocol(): Promise<void> {
     const bytes = await readFile(audioPath);
     return new Response(bytes, {
       headers: {
-        "content-type": "audio/wav",
+        "content-type": getAudioMimeType(audioPath),
       },
     });
   });

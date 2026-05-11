@@ -10,7 +10,7 @@ import type {
 } from "../shared/contracts";
 import { normalizeSegments } from "../shared/vad";
 
-import { readWavMetadata } from "./wav";
+import { readAudioMetadata } from "./audio";
 
 export async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -30,7 +30,7 @@ export async function loadDocument(
   audioPath: string,
   resolveAudioUrl: (audioPath: string) => string,
 ): Promise<LoadedAudioDocument> {
-  const audioMeta = await readWavMetadata(audioPath);
+  const audioMeta = await readAudioMetadata(audioPath);
   const csvPath = deriveCsvPath(audioPath);
   const hasCsv = await fileExists(csvPath);
   const segments = hasCsv

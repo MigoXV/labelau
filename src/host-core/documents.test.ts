@@ -34,6 +34,30 @@ function createWaveFile(durationSec = 1, sampleRate = 16000): Buffer {
   return buffer;
 }
 
+function writeBits(buffer: Buffer, startBit: number, bitLength: number, value: number): void {
+  for (let index = 0; index < bitLength; index += 1) {
+    const bitValue = Math.floor(value / 2 ** (bitLength - index - 1)) & 1;
+    const bitIndex = startBit + index;
+    const byteIndex = Math.floor(bitIndex / 8);
+    const shift = 7 - (bitIndex % 8);
+    buffer[byteIndex] = (buffer[byteIndex] ?? 0) | (bitValue << shift);
+  }
+}
+
+function createFlacFile(durationSec = 1, sampleRate = 16000): Buffer {
+  const streamInfo = Buffer.alloc(34);
+  writeBits(streamInfo, 80, 20, sampleRate);
+  writeBits(streamInfo, 100, 3, 0);
+  writeBits(streamInfo, 103, 5, 15);
+  writeBits(streamInfo, 108, 36, Math.floor(durationSec * sampleRate));
+
+  return Buffer.concat([
+    Buffer.from("fLaC", "ascii"),
+    Buffer.from([0x80, 0x00, 0x00, 0x22]),
+    streamInfo,
+  ]);
+}
+
 afterEach(async () => {
   await Promise.all(testRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -74,5 +98,26 @@ describe("document service", () => {
     expect(document.csvPath).toBe(csvPath);
     expect(document.audioMeta.durationSec).toBeCloseTo(2.5, 3);
     expect(document.segments).toEqual([{ startSec: 0.5, endSec: 0.75 }]);
+  });
+
+  it("loads flac document metadata and existing segments", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "labelau-load-"));
+    testRoots.push(root);
+
+    const audioPath = path.join(root, "voice.flac");
+    const csvPath = path.join(root, "voice.csv");
+    await writeFile(audioPath, createFlacFile(1.25));
+    await writeFile(
+      csvPath,
+      "Name\tStart\tDuration\tTime Format\tType\tDescription\n0\t0:00.100\t0:00.200\tdecimal\tCue\t\n",
+    );
+
+    const document = await loadDocument(audioPath, () => "memory://voice");
+
+    expect(document.stem).toBe("voice");
+    expect(document.csvPath).toBe(csvPath);
+    expect(document.audioMeta.durationSec).toBeCloseTo(1.25, 3);
+    expect(document.segments[0]?.startSec).toBeCloseTo(0.1, 3);
+    expect(document.segments[0]?.endSec).toBeCloseTo(0.3, 3);
   });
 });

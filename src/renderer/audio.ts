@@ -1,5 +1,7 @@
 import { MAX_FRONTEND_SAMPLE_RATE } from "../shared/constants";
 
+import { getAudioMimeType } from "../shared/audio-format";
+
 export interface WaveformLevel {
   min: Float32Array;
   max: Float32Array;
@@ -127,6 +129,7 @@ export async function hydrateAudio(
   if (!response.ok) {
     throw new Error(`Failed to fetch audio: ${response.status}`);
   }
+  const contentType = response.headers.get("content-type") ?? getAudioMimeType(url);
 
   const arrayBuffer = await response.arrayBuffer();
   if (signal?.aborted) {
@@ -151,7 +154,7 @@ export async function hydrateAudio(
   const waveformLevels = decodedChannelData.map((channelData) =>
     buildWaveformLevels(channelData),
   );
-  const blob = new Blob([arrayBuffer], { type: "audio/wav" });
+  const blob = new Blob([arrayBuffer], { type: contentType });
 
   return {
     arrayBuffer,

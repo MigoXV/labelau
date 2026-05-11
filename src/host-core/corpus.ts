@@ -7,11 +7,12 @@ import type {
   ScanDirectoryResult,
   ScanWarning,
 } from "../shared/contracts";
+import { getAudioExtension } from "../shared/audio-format";
 
-import { readWavMetadata } from "./wav";
+import { readAudioMetadata } from "./audio";
 
 interface DirectoryPairing {
-  wavs: Map<string, string>;
+  audioFiles: Map<string, string>;
   csvs: Map<string, string>;
 }
 
@@ -36,14 +37,14 @@ function sortWarnings(warnings: ScanWarning[]): ScanWarning[] {
   );
 }
 
-function normalizeWavReadError(error: unknown): string {
+function normalizeAudioReadError(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
-  if (message.startsWith("Unsupported WAV file:")) {
-    return "不支持的 WAV 文件";
+  if (message.startsWith("Unsupported audio file:")) {
+    return "不支持的音频文件";
   }
 
-  if (message.startsWith("Incomplete WAV metadata:")) {
-    return "WAV 元数据不完整";
+  if (message.startsWith("Incomplete audio metadata:")) {
+    return "音频元数据不完整";
   }
 
   return "读取音频元数据失败";
@@ -55,7 +56,7 @@ async function buildDirectoryTree(
 ): Promise<DirectoryScanResult> {
   const children = await readdir(currentPath, { withFileTypes: true });
   const pairing: DirectoryPairing = {
-    wavs: new Map(),
+    audioFiles: new Map(),
     csvs: new Map(),
   };
 
@@ -79,18 +80,18 @@ async function buildDirectoryTree(
 
     const extension = path.extname(child.name).toLowerCase();
     const stem = path.basename(child.name, path.extname(child.name));
-    if (extension === ".wav") {
-      pairing.wavs.set(stem, absolutePath);
+    if (getAudioExtension(child.name)) {
+      pairing.audioFiles.set(stem, absolutePath);
     } else if (extension === ".csv") {
       pairing.csvs.set(stem, absolutePath);
     }
   }
 
   const entries: CorpusEntry[] = [];
-  for (const [stem, audioPath] of pairing.wavs.entries()) {
+  for (const [stem, audioPath] of pairing.audioFiles.entries()) {
     try {
       const csvPath = pairing.csvs.get(stem) ?? null;
-      const metadata = await readWavMetadata(audioPath);
+      const metadata = await readAudioMetadata(audioPath);
       const relativeDir = path.relative(rootPath, currentPath);
       entries.push({
         audioPath,
@@ -105,7 +106,7 @@ async function buildDirectoryTree(
       warnings.push({
         audioPath,
         stem,
-        reason: normalizeWavReadError(error),
+        reason: normalizeAudioReadError(error),
       });
     }
   }
