@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { copyFile, mkdir, rename, rm, unlink } from "node:fs/promises";
 import crypto from "node:crypto";
 
 import express from "express";
@@ -64,6 +64,23 @@ function getSafeImportPath(rootPath: string, relativePath: string): string {
   }
 
   return destinationPath;
+}
+
+async function moveUploadedFile(
+  sourcePath: string,
+  destinationPath: string,
+): Promise<void> {
+  try {
+    await rename(sourcePath, destinationPath);
+    return;
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "EXDEV") {
+      throw error;
+    }
+  }
+
+  await copyFile(sourcePath, destinationPath);
+  await unlink(sourcePath);
 }
 
 app.use((request, response, next) => {
@@ -249,7 +266,7 @@ app.post("/api/importAudioFiles", upload.array("files"), async (request, respons
 
       const destinationPath = getSafeImportPath(rootPath, importRelativePath);
       await mkdir(path.dirname(destinationPath), { recursive: true });
-      await rename(file.path, destinationPath);
+      await moveUploadedFile(file.path, destinationPath);
       importedCount += 1;
     }
 

@@ -1,17 +1,13 @@
 services:
   frontend:
-    build:
-      context: .
-      dockerfile: docker/frontend.dockerfile
+    image: registry.cn-hangzhou.aliyuncs.com/migo-dl/labelau-frontend:0.3.0a3
     depends_on:
       - service
     ports:
       - "8080:80"
 
   service:
-    build:
-      context: .
-      dockerfile: docker/service.dockerfile
+    image: registry.cn-hangzhou.aliyuncs.com/migo-dl/labelau-service:0.3.0a3
     ports:
       - "3777:3777"
     volumes:
