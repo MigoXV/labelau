@@ -29,6 +29,7 @@ import { listServerDirectory } from "../host-core/server-files";
 
 const app = express();
 const upload = multer({ dest: path.join(process.cwd(), ".labelau-upload-tmp") });
+const JSON_BODY_LIMIT = "500mb";
 const exportedArchives = new Map<
   string,
   { fileName: string; zipPath: string }
@@ -95,7 +96,7 @@ app.use((request, response, next) => {
   next();
 });
 
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true });

@@ -17,6 +17,7 @@ import { normalizeSegments } from "../shared/vad";
 import { createPcmWavBuffer, readWavPcmAudio } from "./wav";
 
 const ENGINE_DEADLINE_MS = 60_000;
+const ENGINE_MAX_MESSAGE_BYTES = 500 * 1024 * 1024;
 const PROTO_ROOT = path.resolve(__dirname, "../../protos");
 const VAD_PROTO_PATH = path.join(PROTO_ROOT, "ux_vad.proto");
 const DENOISE_PROTO_PATH = path.join(PROTO_ROOT, "ux_denoise.proto");
@@ -87,7 +88,10 @@ function createVadClient(address: string): VadClient {
     throw new Error("无法加载 VAD gRPC proto");
   }
 
-  return new Client(address, grpc.credentials.createInsecure()) as unknown as VadClient;
+  return new Client(address, grpc.credentials.createInsecure(), {
+    "grpc.max_send_message_length": ENGINE_MAX_MESSAGE_BYTES,
+    "grpc.max_receive_message_length": ENGINE_MAX_MESSAGE_BYTES,
+  }) as unknown as VadClient;
 }
 
 function createDenoiseClient(address: string): DenoiseClient {
@@ -101,7 +105,10 @@ function createDenoiseClient(address: string): DenoiseClient {
     throw new Error("无法加载降噪 gRPC proto");
   }
 
-  return new Client(address, grpc.credentials.createInsecure()) as unknown as DenoiseClient;
+  return new Client(address, grpc.credentials.createInsecure(), {
+    "grpc.max_send_message_length": ENGINE_MAX_MESSAGE_BYTES,
+    "grpc.max_receive_message_length": ENGINE_MAX_MESSAGE_BYTES,
+  }) as unknown as DenoiseClient;
 }
 
 function callUnary<TRequest, TResponse>(
