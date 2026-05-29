@@ -2,7 +2,7 @@ FROM registry.cn-hangzhou.aliyuncs.com/migo-dl/node:22-alpine AS build
 
 WORKDIR /app
 
-ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG NPM_REGISTRY=https://registry.npmjs.org
 
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 ENV ELECTRON_SKIP_DOWNLOAD=1
@@ -21,7 +21,7 @@ FROM registry.cn-hangzhou.aliyuncs.com/migo-dl/node:22-alpine AS runtime
 
 WORKDIR /app
 
-ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG NPM_REGISTRY=https://registry.npmjs.org
 
 ENV NODE_ENV=production
 
@@ -33,6 +33,7 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts
 
 COPY --from=build /app/dist-node ./dist-node
+COPY protos ./protos
 
 EXPOSE 3777
 

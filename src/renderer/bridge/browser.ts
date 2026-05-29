@@ -1,9 +1,20 @@
 import type {
+  ExportAudioFolderRequest,
+  ExportAudioFolderResult,
   HostBridge,
+  ImportAudioFilesResult,
   LoadedAudioDocument,
   ScanDirectoryResult,
+  ServerDirectoryListing,
+  DenoiseAudioRequest,
+  DenoiseAudioResult,
+  EngineConfig,
+  RunVadPreannotationRequest,
   SaveAnnotationRequest,
   SaveAnnotationResult,
+  TestEngineConnectionRequest,
+  TestEngineConnectionResult,
+  VadSegment,
 } from "../../shared/contracts";
 import { SERVICE_PORT } from "../../shared/constants";
 
@@ -14,6 +25,27 @@ function getServiceOrigin(): string {
   }
 
   return `${window.location.protocol}//${window.location.hostname}:${SERVICE_PORT}`;
+}
+
+async function downloadBlob(url: string, fileName: string): Promise<void> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: string }
+      | null;
+    throw new Error(payload?.error ?? "下载 AudioFolder 压缩包失败");
+  }
+
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  anchor.style.display = "none";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
 }
 
 async function requestJson<TResponse>(
@@ -79,8 +111,10 @@ async function postJson<TResponse>(
 export const browserHostBridge: HostBridge = {
   mode: "browser",
   async pickDirectory() {
-    const directory = window.prompt("输入待扫描目录的绝对路径");
-    return directory?.trim() ? directory.trim() : null;
+    return null;
+  },
+  listServerDirectory(path?: string) {
+    return postJson<ServerDirectoryListing>("/api/listServerDirectory", { path });
   },
   scanDirectory(rootPath: string) {
     return postJson<ScanDirectoryResult>("/api/scanDirectory", { rootPath });
@@ -99,6 +133,90 @@ export const browserHostBridge: HostBridge = {
   },
   saveAnnotation(request: SaveAnnotationRequest) {
     return postJson<SaveAnnotationResult>("/api/saveAnnotation", request);
+  },
+  runVadPreannotation(request: RunVadPreannotationRequest) {
+    return postJson<VadSegment[]>("/api/runVadPreannotation", request);
+  },
+  async denoiseAudio(request: DenoiseAudioRequest) {
+    const result = await postJson<DenoiseAudioResult>("/api/denoiseAudio", request);
+    return {
+      ...result,
+      audioUrl: result.audioUrl.startsWith("http")
+        ? result.audioUrl
+        : `${getServiceOrigin()}${result.audioUrl}`,
+    };
+  },
+  async getEngineConfigDefaults() {
+    const endpoint = `${getServiceOrigin()}/api/engineConfigDefaults`;
+    try {
+      const response = await fetch(endpoint);
+      if (!response.ok) {
+        return { vadGrpcUrl: "", denoiseGrpcUrl: "" };
+      }
+      return response.json() as Promise<EngineConfig>;
+    } catch {
+      return { vadGrpcUrl: "", denoiseGrpcUrl: "" };
+    }
+  },
+  testEngineConnection(request: TestEngineConnectionRequest) {
+    return postJson<TestEngineConnectionResult>(
+      "/api/testEngineConnection",
+      request,
+    );
+  },
+  async importAudioFiles(
+    rootPath: string,
+    files: File[],
+    onProgress?: (progressPercent: number) => void,
+  ) {
+    const formData = new FormData();
+    formData.append("rootPath", rootPath);
+    const relativePaths: string[] = [];
+    for (const file of files) {
+      const relativePath =
+        (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
+        file.name;
+      relativePaths.push(relativePath);
+      formData.append("files", file, file.name);
+    }
+    formData.append("relativePaths", JSON.stringify(relativePaths));
+
+    const endpoint = `${getServiceOrigin()}${"/api/importAudioFiles"}`;
+    return new Promise<ImportAudioFilesResult>((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open("POST", endpoint);
+      request.upload.onprogress = (event) => {
+        if (!event.lengthComputable) {
+          return;
+        }
+        onProgress?.((event.loaded / event.total) * 100);
+      };
+      request.onerror = () => reject(new Error("导入音频失败"));
+      request.onload = () => {
+        const payload = JSON.parse(request.responseText || "{}") as
+          | ImportAudioFilesResult
+          | { error?: string };
+        if (request.status < 200 || request.status >= 300) {
+          reject(new Error("error" in payload ? payload.error ?? "导入音频失败" : "导入音频失败"));
+          return;
+        }
+        resolve(payload as ImportAudioFilesResult);
+      };
+      request.send(formData);
+    });
+  },
+  async exportAudioFolder(request: ExportAudioFolderRequest) {
+    const result = await postJson<ExportAudioFolderResult>(
+      "/api/exportAudioFolder",
+      request,
+    );
+    if (result.downloadUrl) {
+      const downloadUrl = result.downloadUrl.startsWith("http")
+        ? result.downloadUrl
+        : `${getServiceOrigin()}${result.downloadUrl}`;
+      await downloadBlob(downloadUrl, result.fileName);
+    }
+    return result;
   },
   onWindowCloseRequested() {
     return () => undefined;

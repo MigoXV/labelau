@@ -67,14 +67,100 @@ export interface SaveAnnotationResult {
   csvPath: string;
 }
 
+export interface RunVadPreannotationRequest {
+  audioPath: string;
+  audioContentBase64?: string;
+  vadGrpcUrl?: string;
+}
+
+export interface DenoiseAudioRequest {
+  audioPath: string;
+  denoiseGrpcUrl?: string;
+}
+
+export interface DenoiseAudioResult {
+  audioUrl: string;
+  audioContentBase64: string;
+  sampleRate: number;
+  channelCount: number;
+  durationSec: number;
+}
+
+export interface EngineConfig {
+  vadGrpcUrl: string;
+  denoiseGrpcUrl: string;
+}
+
+export type EngineKind = "vad" | "denoise";
+
+export interface TestEngineConnectionRequest {
+  engine: EngineKind;
+  grpcUrl?: string;
+}
+
+export interface TestEngineConnectionResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface ImportAudioFilesResult {
+  importedCount: number;
+  skippedCount: number;
+  rootPath: string;
+  message: string;
+}
+
+export interface ExportAudioFolderRequest {
+  rootPath: string;
+  audioPaths?: string[];
+  splitName: "test";
+}
+
+export interface ExportAudioFolderResult {
+  exportedCount: number;
+  fileName: string;
+  downloadUrl?: string;
+  savedPath?: string;
+  canceled?: boolean;
+}
+
+export interface ServerDirectoryEntry {
+  name: string;
+  path: string;
+  kind: "directory" | "file";
+}
+
+export interface ServerDirectoryListing {
+  currentPath: string;
+  parentPath: string | null;
+  entries: ServerDirectoryEntry[];
+}
+
 export interface HostBridge {
   mode: "browser" | "electron";
   pickDirectory(): Promise<string | null>;
+  listServerDirectory(path?: string): Promise<ServerDirectoryListing>;
   scanDirectory(rootPath: string): Promise<ScanDirectoryResult>;
   loadDocument(audioPath: string): Promise<LoadedAudioDocument>;
   saveAnnotation(
     request: SaveAnnotationRequest,
   ): Promise<SaveAnnotationResult>;
+  runVadPreannotation(
+    request: RunVadPreannotationRequest,
+  ): Promise<VadSegment[]>;
+  denoiseAudio(request: DenoiseAudioRequest): Promise<DenoiseAudioResult>;
+  getEngineConfigDefaults(): Promise<EngineConfig>;
+  testEngineConnection(
+    request: TestEngineConnectionRequest,
+  ): Promise<TestEngineConnectionResult>;
+  importAudioFiles(
+    rootPath: string,
+    files: File[],
+    onProgress?: (progressPercent: number) => void,
+  ): Promise<ImportAudioFilesResult>;
+  exportAudioFolder(
+    request: ExportAudioFolderRequest,
+  ): Promise<ExportAudioFolderResult>;
   onWindowCloseRequested(listener: () => void): () => void;
   confirmWindowClose(dirtyCount: number): Promise<WindowCloseAction>;
   completeWindowClose(): Promise<void>;

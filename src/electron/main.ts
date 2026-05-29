@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { copyFile, readFile } from "node:fs/promises";
 
 import {
   app,
@@ -10,10 +10,25 @@ import {
   type MessageBoxOptions,
 } from "electron";
 
-import type { SaveAnnotationRequest } from "../shared/contracts";
+import type {
+  ExportAudioFolderRequest,
+  SaveAnnotationRequest,
+} from "../shared/contracts";
 import { getAudioMimeType } from "../shared/audio-format";
+import {
+  cleanupExportedArchive,
+  exportAudioFolderArchive,
+} from "../host-core/audiofolder-export";
 import { loadDocument, saveAnnotation } from "../host-core/documents";
+import {
+  denoiseAudio,
+  getDenoisedAudio,
+  getEngineConfigDefaults,
+  runVadPreannotation,
+  testEngineConnection,
+} from "../host-core/engines";
 import { scanCorpus } from "../host-core/corpus";
+import { listServerDirectory } from "../host-core/server-files";
 import {
   getCloseDialogDetail,
   mapCloseDialogResponse,
@@ -77,6 +92,20 @@ function createWindow(): BrowserWindow {
 async function registerProtocol(): Promise<void> {
   await protocol.handle("labelau", async (request) => {
     const url = new URL(request.url);
+    if (url.hostname === "denoised") {
+      const id = url.searchParams.get("id");
+      const bytes = id ? getDenoisedAudio(id) : null;
+      if (!bytes) {
+        return new Response("Not found", { status: 404 });
+      }
+
+      return new Response(bytes, {
+        headers: {
+          "content-type": "audio/wav",
+        },
+      });
+    }
+
     if (url.hostname !== "audio") {
       return new Response("Not found", { status: 404 });
     }
@@ -104,6 +133,10 @@ async function registerIpcHandlers(): Promise<void> {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
+  ipcMain.handle("host:listServerDirectory", async (_event, requestedPath?: string) => {
+    return listServerDirectory(requestedPath);
+  });
+
   ipcMain.handle("host:scanDirectory", async (_event, rootPath: string) => {
     return scanCorpus(rootPath);
   });
@@ -119,6 +152,70 @@ async function registerIpcHandlers(): Promise<void> {
     "host:saveAnnotation",
     async (_event, request: SaveAnnotationRequest) => {
       return saveAnnotation(request);
+    },
+  );
+
+  ipcMain.handle("host:runVadPreannotation", async (_event, request) => {
+    return runVadPreannotation(request);
+  });
+
+  ipcMain.handle("host:denoiseAudio", async (_event, request) => {
+    return denoiseAudio(
+      request.audioPath,
+      (id) => {
+        const params = new URLSearchParams({ id });
+        return `labelau://denoised?${params.toString()}`;
+      },
+      request.denoiseGrpcUrl,
+    );
+  });
+
+  ipcMain.handle("host:getEngineConfigDefaults", async () => {
+    return getEngineConfigDefaults();
+  });
+
+  ipcMain.handle("host:testEngineConnection", async (_event, request) => {
+    return testEngineConnection(request);
+  });
+
+  ipcMain.handle(
+    "host:exportAudioFolder",
+    async (event, request: ExportAudioFolderRequest) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const archive = await exportAudioFolderArchive({
+        rootPath: request.rootPath,
+        audioPaths: Array.isArray(request.audioPaths) ? request.audioPaths : [],
+        splitName: request.splitName === "test" ? "test" : "test",
+      });
+
+      try {
+        const saveResult = window
+          ? await dialog.showSaveDialog(window, {
+              defaultPath: path.join(app.getPath("downloads"), archive.fileName),
+              filters: [{ name: "Zip Archive", extensions: ["zip"] }],
+            })
+          : await dialog.showSaveDialog({
+              defaultPath: path.join(app.getPath("downloads"), archive.fileName),
+              filters: [{ name: "Zip Archive", extensions: ["zip"] }],
+            });
+
+        if (saveResult.canceled || !saveResult.filePath) {
+          return {
+            canceled: true,
+            exportedCount: archive.exportedCount,
+            fileName: archive.fileName,
+          };
+        }
+
+        await copyFile(archive.zipPath, saveResult.filePath);
+        return {
+          exportedCount: archive.exportedCount,
+          fileName: archive.fileName,
+          savedPath: saveResult.filePath,
+        };
+      } finally {
+        await cleanupExportedArchive(archive.zipPath).catch(() => undefined);
+      }
     },
   );
 

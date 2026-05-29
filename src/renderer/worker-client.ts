@@ -1,5 +1,5 @@
 import type { FrequencyScale } from "../shared/contracts";
-import type { SystemThemeMode } from "./theme";
+import type { SystemThemeMode } from "svara-ui/labelau";
 
 type WorkerRequest =
   | {
@@ -47,6 +47,7 @@ export class SpectrogramWorkerClient {
   );
 
   private requestId = 0;
+  private latestRenderRequestId = 0;
   private pending = new Map<
     number,
     (payload: { width: number; height: number; pixels: Uint8ClampedArray }) => void
@@ -74,16 +75,17 @@ export class SpectrogramWorkerClient {
     channelData: Int8Array[],
     sampleRate: number,
   ): void {
+    const clonedChannelData = channelData.map((channel) => channel.slice());
     const payload: WorkerRequest = {
       kind: "load-document",
       documentId,
-      channelData,
+      channelData: clonedChannelData,
       sampleRate,
     };
 
     this.worker.postMessage(
       payload,
-      channelData.map((channel) => channel.buffer),
+      clonedChannelData.map((channel) => channel.buffer),
     );
   }
 
@@ -104,6 +106,29 @@ export class SpectrogramWorkerClient {
 
     return new Promise<ImageData>((resolve) => {
       this.pending.set(requestId, ({ width, height, pixels }) => {
+        resolve(new ImageData(new Uint8ClampedArray(pixels), width, height));
+      });
+    });
+  }
+
+  renderLatest(
+    request: Omit<Extract<WorkerRequest, { kind: "render" }>, "kind" | "requestId">,
+  ) {
+    const requestId = ++this.requestId;
+    this.latestRenderRequestId = requestId;
+    this.worker.postMessage({
+      kind: "render",
+      requestId,
+      ...request,
+    } satisfies WorkerRequest);
+
+    return new Promise<ImageData | null>((resolve) => {
+      this.pending.set(requestId, ({ width, height, pixels }) => {
+        if (requestId !== this.latestRenderRequestId) {
+          resolve(null);
+          return;
+        }
+
         resolve(new ImageData(new Uint8ClampedArray(pixels), width, height));
       });
     });

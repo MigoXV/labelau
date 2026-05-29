@@ -12,6 +12,8 @@
     "build:renderer": "vite build",
     "build:node": "tsc -p tsconfig.node.json",
     "build": "pnpm clean && pnpm build:renderer && pnpm build:node",
+    "docker:build": "bash scripts/docker-build.sh",
+    "docker:build:0.2.0a1": "bash scripts/docker-build.sh 0.2.0a1 --push",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -30,14 +32,20 @@
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/manrope": "^5.2.7",
+    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/proto-loader": "^0.8.1",
     "express": "^5.1.0",
     "fft.js": "^4.0.4",
+    "jszip": "^3.10.1",
+    "multer": "^2.1.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "svara-ui": "^0.1.0",
     "zustand": "^5.0.8"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
+    "@types/multer": "^2.1.0",
     "@types/node": "^24.9.1",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
@@ -58,6 +66,7 @@
     "files": [
       "dist/**/*",
       "dist-node/**/*",
+      "protos/**/*",
       "package.json"
     ],
     "directories": {

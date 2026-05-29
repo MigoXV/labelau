@@ -2,7 +2,7 @@ FROM registry.cn-hangzhou.aliyuncs.com/migo-dl/node:22-alpine AS build
 
 WORKDIR /app
 
-ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG NPM_REGISTRY=https://registry.npmjs.org
 
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 ENV ELECTRON_SKIP_DOWNLOAD=1
