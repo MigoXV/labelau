@@ -1541,23 +1541,38 @@ export function App() {
 
   return (
     <div
-      className="app-shell"
+      className="app-shell paper-shell"
       style={
         {
           ...uiThemeStyle,
+          "--app-bg": "var(--paper-bg)",
+          "--body-top": "var(--paper-bg)",
+          "--body-radial": "rgba(255, 255, 255, 0)",
+          "--panel-bg": "var(--paper-surface)",
+          "--panel-bg-strong": "var(--paper-surface)",
+          "--panel-border": "var(--paper-line)",
+          "--canvas-border": "var(--paper-line)",
+          "--text-primary": "var(--paper-text)",
+          "--text-secondary": "var(--paper-muted)",
+          "--text-tertiary": "var(--paper-faint)",
+          "--accent": "var(--paper-accent)",
+          "--accent-soft": "var(--paper-accent-soft)",
+          "--danger": "var(--paper-danger)",
+          "--shadow": "none",
           "--sidebar-width": `${sidebarWidth}px`,
           "--waveform-height": `${waveformHeight}px`,
         } as CSSProperties
       }
     >
-      <aside className="sidebar">
-        <div className="sidebar-header">
+      <aside className="sidebar paper-sidebar">
+        <div className="sidebar-header paper-sidebar-header">
           <div>
             <h1>LabelAU</h1>
           </div>
         </div>
 
         <div
+          className="paper-directory-actions"
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
@@ -1593,13 +1608,13 @@ export function App() {
           onChange={handleImportDirectoryChange}
         />
 
-        <div className="path-card" style={{ paddingTop: "18px" }}>
+        <div className="path-card paper-path-card">
           <div className="path-row">
             <code>{rootPath || "未选择目录"}</code>
           </div>
         </div>
 
-        <label className="search-field">
+        <label className="search-field paper-search-field">
           <span>搜索文件</span>
           <input
             placeholder="按文件名或目录筛选"
@@ -1608,7 +1623,7 @@ export function App() {
           />
         </label>
 
-        <div className="filter-panel">
+        <div className="filter-panel paper-filter-panel">
           <div className="filter-header">
             <div className="filter-header-copy">
               <span className="label">任务筛选</span>
@@ -1676,7 +1691,7 @@ export function App() {
           </div>
         </div>
 
-        <div ref={treePanelRef} className="tree-panel">
+        <div ref={treePanelRef} className="tree-panel paper-tree-panel">
           {filteredTree ? (
             <DirectoryTreeView
               tree={filteredTree}
@@ -1710,9 +1725,9 @@ export function App() {
         }}
       />
 
-      <main className="workspace">
-        <header className="workspace-header">
-          <div className="toolbar toolbar-primary">
+      <main className="workspace paper-workspace">
+        <header className="workspace-header paper-workspace-header">
+          <div className="toolbar toolbar-primary paper-topbar">
             <div className="toolbar-title">
               <h2>
                 {currentDocument?.stem ??
@@ -1727,7 +1742,7 @@ export function App() {
               ) : null}
             </div>
 
-            <div className="toolbar-actions">
+            <div className="toolbar-actions paper-toolbar-actions">
               <button
                 className="ghost-button"
                 onClick={() => setIsEngineSettingsOpen(true)}
@@ -1800,8 +1815,8 @@ export function App() {
             </div>
           </div>
 
-          <div className="toolbar toolbar-secondary">
-            <div className="toolbar-controls">
+          <div className="toolbar toolbar-secondary paper-controlbar">
+            <div className="toolbar-controls paper-toolbar-controls">
               <button
                 className="ghost-button toolbar-toggle"
                 disabled={!currentDocument}
@@ -1831,7 +1846,7 @@ export function App() {
               </button>
             </div>
 
-            <div className="toolbar-metrics">
+            <div className="toolbar-metrics paper-toolbar-metrics">
               <Metric
                 label="状态"
                 value={currentState ? getEntryStateLabel(currentState) : "待开始"}
@@ -1855,7 +1870,7 @@ export function App() {
           </div>
         </header>
 
-        <section ref={editorRef} className="editor">
+        <section ref={editorRef} className="editor paper-editor">
           {currentDocument ? (
             <>
               <WaveformPanel
@@ -1922,7 +1937,7 @@ export function App() {
               />
 
               <div className="spectrogram-shell">
-                <div className="spectrogram-header">
+                <div className="spectrogram-header paper-spectrogram-header">
                   <div className="channel-picker">
                     {Array.from({ length: currentDocument.channelCount }, (_, index) => (
                       <button
@@ -2004,7 +2019,7 @@ export function App() {
           )}
         </section>
 
-        <footer className="status-bar">
+        <footer className="status-bar paper-status-bar">
           <div className="status-group">
             <span className="status-chip">
               {currentDocument

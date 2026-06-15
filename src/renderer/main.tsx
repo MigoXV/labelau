@@ -7,6 +7,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "svara-ui/styles.css";
 import "svara-ui/labelau/styles.css";
+import "./manas-paper.css";
 
 import { App } from "./App";
 
