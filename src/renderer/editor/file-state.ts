@@ -26,7 +26,7 @@ export function getEntryStateLabel(state: EntryState): string {
     case "saved":
       return "已保存";
     case "matched":
-      return "已导入";
+      return "已处理";
     case "new":
       return "未处理";
   }

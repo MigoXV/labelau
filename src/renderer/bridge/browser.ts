@@ -91,7 +91,7 @@ async function postJson<TResponse>(
     response = await requestJson<TResponse>(endpoint, body);
   } catch {
     throw new Error(
-      `Host service is unreachable at ${endpoint}. Start it with "pnpm dev:web" or "pnpm dev:service".`,
+      `Host service is unreachable at ${endpoint}. Start it with "pnpm dev:all" or "pnpm dev:service".`,
     );
   }
 

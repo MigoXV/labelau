@@ -1,6 +1,6 @@
 import type { WindowCloseAction } from "./window-close";
 
-export type FrequencyScale = "linear" | "log";
+export type FrequencyScale = "linear" | "mel" | "log";
 
 export interface AudioMeta {
   sampleRate: number;

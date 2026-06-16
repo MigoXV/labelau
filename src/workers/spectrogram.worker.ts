@@ -48,6 +48,8 @@ const fft = new FFT(SPECTROGRAM_FFT_SIZE);
 const hannWindow = new Float32Array(SPECTROGRAM_WINDOW_SIZE).map((_, index) => {
   return 0.5 * (1 - Math.cos((2 * Math.PI * index) / (SPECTROGRAM_WINDOW_SIZE - 1)));
 });
+const hannCoherentGain =
+  hannWindow.reduce((total, value) => total + value, 0) / 2;
 
 const DARK_SPECTROGRAM_STOPS = [
   { at: 0, color: [8, 4, 14] as const },
@@ -71,19 +73,8 @@ const LIGHT_SPECTROGRAM_STOPS = [
   { at: 1, color: [255, 248, 226] as const },
 ];
 
-function percentile(values: number[], ratio: number): number {
-  if (values.length === 0) {
-    return 0;
-  }
-
-  const sorted = [...values].sort((left, right) => left - right);
-  const index = clamp(
-    Math.floor((sorted.length - 1) * ratio),
-    0,
-    sorted.length - 1,
-  );
-  return sorted[index];
-}
+const SPECTROGRAM_MIN_DB = -90;
+const SPECTROGRAM_MAX_DB = 0;
 
 function cacheResult(key: string, value: Uint8ClampedArray): Uint8ClampedArray {
   if (cache.has(key)) {
@@ -111,6 +102,12 @@ function frequencyForRow(
   scale: FrequencyScale,
 ): number {
   const alpha = 1 - row / Math.max(height - 1, 1);
+  if (scale === "mel") {
+    const minMel = hzToMel(minFreq);
+    const maxMel = hzToMel(Math.max(maxFreq, minFreq + 1));
+    return melToHz(lerp(minMel, maxMel, alpha));
+  }
+
   if (scale === "log") {
     const safeMin = Math.max(minFreq, 1);
     const minLog = Math.log10(safeMin);
@@ -119,6 +116,14 @@ function frequencyForRow(
   }
 
   return lerp(minFreq, maxFreq, alpha);
+}
+
+function hzToMel(frequency: number): number {
+  return 2595 * Math.log10(1 + Math.max(frequency, 0) / 700);
+}
+
+function melToHz(mel: number): number {
+  return 700 * (10 ** (mel / 2595) - 1);
 }
 
 function createFrame(
@@ -151,7 +156,8 @@ function magnitudesForFrame(frame: Float32Array): Float32Array {
     const real = complex[index * 2];
     const imaginary = complex[index * 2 + 1];
     const magnitude = Math.sqrt(real * real + imaginary * imaginary);
-    magnitudes[index] = 20 * Math.log10(magnitude + 1e-6);
+    const normalizedMagnitude = magnitude / Math.max(hannCoherentGain, 1e-6);
+    magnitudes[index] = 20 * Math.log10(normalizedMagnitude + 1e-6);
   }
 
   return magnitudes;
@@ -194,45 +200,6 @@ function colorize(
   return [brightest[0], brightest[1], brightest[2], 255];
 }
 
-function estimateNoiseFloor(columns: Float32Array[]): Float32Array {
-  const binCount = columns[0]?.length ?? 0;
-  const floor = new Float32Array(binCount);
-  const mean = new Float32Array(binCount);
-  floor.fill(Number.POSITIVE_INFINITY);
-
-  for (const column of columns) {
-    for (let binIndex = 0; binIndex < binCount; binIndex += 1) {
-      const value = column[binIndex];
-      floor[binIndex] = Math.min(floor[binIndex], value);
-      mean[binIndex] += value;
-    }
-  }
-
-  for (let binIndex = 0; binIndex < binCount; binIndex += 1) {
-    const blended = lerp(
-      floor[binIndex],
-      mean[binIndex] / Math.max(columns.length, 1),
-      0.16,
-    );
-    floor[binIndex] = Number.isFinite(blended) ? blended : 0;
-  }
-
-  const smoothed = new Float32Array(binCount);
-  for (let binIndex = 0; binIndex < binCount; binIndex += 1) {
-    let weightedSum = 0;
-    let totalWeight = 0;
-    for (let offset = -2; offset <= 2; offset += 1) {
-      const sampleIndex = clamp(binIndex + offset, 0, binCount - 1);
-      const weight = offset === 0 ? 0.4 : Math.abs(offset) === 1 ? 0.2 : 0.1;
-      weightedSum += floor[sampleIndex] * weight;
-      totalWeight += weight;
-    }
-    smoothed[binIndex] = weightedSum / Math.max(totalWeight, 1e-6);
-  }
-
-  return smoothed;
-}
-
 function renderSpectrogram(
   document: WorkerDocument,
   request: Extract<IncomingMessage, { kind: "render" }>,
@@ -250,34 +217,6 @@ function renderSpectrogram(
     const centerSample = Math.round(time * sampleRate);
     return magnitudesForFrame(createFrame(channel, centerSample));
   });
-  const noiseFloor = estimateNoiseFloor(columns);
-  const sampledValues: number[] = [];
-  const enhancedColumns = columns.map((column, columnIndex) => {
-    const enhanced = new Float32Array(column.length);
-    for (let binIndex = 0; binIndex < column.length; binIndex += 1) {
-      const frequency = (binIndex / Math.max(column.length - 1, 1)) * nyquist;
-      const voiceWeight =
-        frequency >= 180 && frequency <= 4200
-          ? 1.12
-          : frequency >= 90 && frequency <= 6200
-            ? 1.04
-            : 1;
-      const enhancedValue = Math.max(
-        0,
-        (column[binIndex] - noiseFloor[binIndex]) * voiceWeight,
-      );
-      enhanced[binIndex] = enhancedValue;
-      if (columnIndex % 4 === 0 && binIndex % 2 === 0) {
-        sampledValues.push(enhancedValue);
-      }
-    }
-    return enhanced;
-  });
-  const lowerBound = percentile(sampledValues, 0.08);
-  const upperBound = Math.max(
-    percentile(sampledValues, 0.995),
-    lowerBound + 10,
-  );
 
   for (let row = 0; row < height; row += 1) {
     const frequency = frequencyForRow(
@@ -296,9 +235,9 @@ function renderSpectrogram(
 
     for (let x = 0; x < width; x += 1) {
       const [red, green, blue, alpha] = colorize(
-        enhancedColumns[x][binIndex],
-        lowerBound,
-        upperBound,
+        columns[x][binIndex],
+        SPECTROGRAM_MIN_DB,
+        SPECTROGRAM_MAX_DB,
         request.themeMode,
       );
       const offset = (row * width + x) * 4;
