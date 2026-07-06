@@ -49,6 +49,8 @@ export interface FrequencyRange {
 export interface EntryOverlayState {
   hasAnnotation: boolean;
   csvPath: string | null;
+  annotationPath?: string | null;
+  textGridPath?: string | null;
 }
 
 export interface SegmentHit {

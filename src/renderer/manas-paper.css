@@ -948,6 +948,10 @@
   background: var(--paper-bg);
 }
 
+.paper-editor-waveform-only {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .paper-editor-empty {
   display: block;
   padding: 0;

@@ -6,12 +6,18 @@ import JSZip from "jszip";
 
 import { parseAuditionAnnotationText } from "../shared/audition";
 import { parseAnnotationDocument } from "../shared/annotations";
+import { parseTextGridAnnotationText } from "../shared/textgrid";
 import type {
   AnnotationSegment,
   ExportAudioFolderRequest,
 } from "../shared/contracts";
 
-import { deriveAnnotationPath, deriveCsvPath, fileExists } from "./documents";
+import {
+  deriveAnnotationPath,
+  deriveCsvPath,
+  deriveTextGridPath,
+  fileExists,
+} from "./documents";
 
 export interface ExportedAudioFolderArchive {
   exportedCount: number;
@@ -64,6 +70,11 @@ async function readExportSegments(audioPath: string): Promise<AnnotationSegment[
     return parseAnnotationDocument(
       JSON.parse(await readFile(annotationPath, "utf8")) as unknown,
     ).segments;
+  }
+
+  const textGridPath = deriveTextGridPath(audioPath);
+  if (await fileExists(textGridPath)) {
+    return parseTextGridAnnotationText(await readFile(textGridPath, "utf8"));
   }
 
   const csvPath = deriveCsvPath(audioPath);

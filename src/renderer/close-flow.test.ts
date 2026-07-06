@@ -39,11 +39,13 @@ describe("saveDirtyDocuments", () => {
     expect(saveAnnotation).toHaveBeenNthCalledWith(1, {
       audioPath: "alpha.wav",
       csvPath: null,
+      textGridPath: undefined,
       segments: [{ startSec: 0.1, endSec: 0.3 }],
     });
     expect(saveAnnotation).toHaveBeenNthCalledWith(2, {
       audioPath: "beta.wav",
       csvPath: null,
+      textGridPath: undefined,
       segments: [{ startSec: 0.1, endSec: 0.3 }],
     });
     expect(onSaved).toHaveBeenCalledTimes(2);
@@ -51,11 +53,13 @@ describe("saveDirtyDocuments", () => {
       {
         audioPath: "alpha.wav",
         csvPath: "/tmp/alpha.csv",
+        textGridPath: undefined,
         stem: "alpha",
       },
       {
         audioPath: "beta.wav",
         csvPath: "/tmp/beta.csv",
+        textGridPath: undefined,
         stem: "beta",
       },
     ]);
@@ -87,6 +91,7 @@ describe("saveDirtyDocuments", () => {
     expect(onSaved).toHaveBeenCalledWith({
       audioPath: "alpha.wav",
       csvPath: "/tmp/alpha.csv",
+      textGridPath: undefined,
       stem: "alpha",
     });
   });

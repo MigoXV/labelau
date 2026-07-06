@@ -15,6 +15,7 @@ interface DirectoryPairing {
   audioFiles: Map<string, string>;
   csvs: Map<string, string>;
   annotations: Map<string, string>;
+  textGrids: Map<string, string>;
 }
 
 interface DirectoryScanResult {
@@ -60,6 +61,7 @@ async function buildDirectoryTree(
     audioFiles: new Map(),
     csvs: new Map(),
     annotations: new Map(),
+    textGrids: new Map(),
   };
 
   const directories: CorpusDirectory[] = [];
@@ -86,6 +88,8 @@ async function buildDirectoryTree(
       pairing.audioFiles.set(stem, absolutePath);
     } else if (child.name.toLowerCase().endsWith(".labelau.json")) {
       pairing.annotations.set(child.name.slice(0, -".labelau.json".length), absolutePath);
+    } else if (extension === ".textgrid") {
+      pairing.textGrids.set(stem, absolutePath);
     } else if (extension === ".csv") {
       pairing.csvs.set(stem, absolutePath);
     }
@@ -96,15 +100,17 @@ async function buildDirectoryTree(
     try {
       const csvPath = pairing.csvs.get(stem) ?? null;
       const annotationPath = pairing.annotations.get(stem) ?? null;
+      const textGridPath = pairing.textGrids.get(stem) ?? null;
       const metadata = await readAudioMetadata(audioPath);
       const relativeDir = path.relative(rootPath, currentPath);
       entries.push({
         audioPath,
         csvPath,
         annotationPath,
+        textGridPath,
         relativeDir: relativeDir === "" ? "." : relativeDir,
         stem,
-        hasAnnotation: Boolean(annotationPath || csvPath),
+        hasAnnotation: Boolean(annotationPath || textGridPath || csvPath),
         isDirty: false,
         audioMeta: metadata,
       });

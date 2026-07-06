@@ -131,6 +131,22 @@ describe("scanCorpus", () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it("pairs audio files with sibling TextGrid annotations", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "labelau-corpus-"));
+    testRoots.push(root);
+
+    const textGridPath = path.join(root, "alpha.TextGrid");
+    await writeFile(path.join(root, "alpha.wav"), createWaveFile());
+    await writeFile(textGridPath, "placeholder");
+
+    const result = await scanCorpus(root);
+
+    expect(result.tree.entries).toHaveLength(1);
+    expect(result.tree.entries[0]?.stem).toBe("alpha");
+    expect(result.tree.entries[0]?.textGridPath).toBe(textGridPath);
+    expect(result.tree.entries[0]?.hasAnnotation).toBe(true);
+  });
+
   it("keeps flac files whose stream info has unknown length", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "labelau-corpus-"));
     testRoots.push(root);

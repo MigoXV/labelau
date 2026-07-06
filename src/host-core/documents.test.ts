@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { parseAuditionText } from "../shared/audition";
+import { serializeTextGrid } from "../shared/textgrid";
 import { loadDocument, saveAnnotation } from "./documents";
 
 const testRoots: string[] = [];
@@ -76,8 +77,13 @@ describe("document service", () => {
     });
 
     expect(result.csvPath).toBe(path.join(root, "sample.csv"));
+    expect(result.textGridPath).toBe(path.join(root, "sample.TextGrid"));
     const csvText = await readFile(result.csvPath, "utf8");
     expect(parseAuditionText(csvText)).toEqual([{ startSec: 0.2, endSec: 0.5 }]);
+    const textGridText = await readFile(result.textGridPath ?? "", "utf8");
+    expect(textGridText).toContain('Object class = "TextGrid"');
+    expect(textGridText).toContain("xmin = 0.2");
+    expect(textGridText).toContain("xmax = 0.5");
   });
 
   it("loads document metadata and existing segments", async () => {
@@ -121,5 +127,36 @@ describe("document service", () => {
     expect(document.audioMeta.durationSec).toBeCloseTo(1.25, 3);
     expect(document.segments[0]?.startSec).toBeCloseTo(0.1, 3);
     expect(document.segments[0]?.endSec).toBeCloseTo(0.3, 3);
+  });
+
+  it("loads TextGrid annotations before sibling csv files", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "labelau-textgrid-"));
+    testRoots.push(root);
+
+    const audioPath = path.join(root, "voice.wav");
+    const csvPath = path.join(root, "voice.csv");
+    const textGridPath = path.join(root, "voice.TextGrid");
+    await writeFile(audioPath, createWaveFile(2));
+    await writeFile(
+      csvPath,
+      "Name\tStart\tDuration\tTime Format\tType\tDescription\n0\t0:00.100\t0:00.100\tdecimal\tCue\tcsv\n",
+    );
+    await writeFile(
+      textGridPath,
+      serializeTextGrid([{ startSec: 0.4, endSec: 0.8, transcript: "textgrid" }], 2),
+    );
+
+    const document = await loadDocument(audioPath, () => "memory://voice");
+
+    expect(document.csvPath).toBe(csvPath);
+    expect(document.textGridPath).toBe(textGridPath);
+    expect(document.segments).toEqual([
+      {
+        id: "textgrid_0",
+        startSec: 0.4,
+        endSec: 0.8,
+        transcript: "textgrid",
+      },
+    ]);
   });
 });

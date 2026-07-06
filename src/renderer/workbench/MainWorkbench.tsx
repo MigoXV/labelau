@@ -193,6 +193,7 @@ export function MainWorkbench(props: MainWorkbenchProps) {
     playbackRate,
     denoiseActionLabel,
     isInspectorOpen,
+    showSpectrogram,
     inspector,
     statusBar,
     children,
@@ -285,13 +286,15 @@ export function MainWorkbench(props: MainWorkbenchProps) {
                 >
                   工具：{getToolLabel(heldTool)}
                 </button>
-                <button
-                  className="ghost-button tool-button toolbar-toggle"
-                  disabled={!currentDocument}
-                  onClick={onToggleFrequencyScale}
-                >
-                  频率：{getFrequencyScaleLabel(frequencyScale)}
-                </button>
+                {showSpectrogram ? (
+                  <button
+                    className="ghost-button tool-button toolbar-toggle"
+                    disabled={!currentDocument}
+                    onClick={onToggleFrequencyScale}
+                  >
+                    频率：{getFrequencyScaleLabel(frequencyScale)}
+                  </button>
+                ) : null}
                 <button
                   className="ghost-button tool-button toolbar-toggle"
                   disabled={!currentDocument}
@@ -353,7 +356,9 @@ export function MainWorkbench(props: MainWorkbenchProps) {
           ref={editorRef}
           className={
             currentDocument
-              ? "editor paper-editor"
+              ? showSpectrogram
+                ? "editor paper-editor"
+                : "editor paper-editor paper-editor-waveform-only"
               : "editor paper-editor paper-editor-empty"
           }
         >

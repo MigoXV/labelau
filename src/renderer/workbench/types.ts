@@ -77,12 +77,14 @@ export interface MoreActionsMenuProps {
   canExportDataset: boolean;
   canUndo: boolean;
   isExporting: boolean;
+  showSpectrogram: boolean;
   uiThemePreference: UiThemePreference;
   onDiscardChanges: () => void;
   onExportDataset: () => void;
   onOpenEngineSettings: () => void;
   onOpenHelp: () => void;
   onUndo: () => void;
+  onToggleSpectrogram: () => void;
   onThemeChange: (value: UiThemePreference) => void;
 }
 
@@ -107,6 +109,7 @@ export interface MainWorkbenchProps {
   playbackRate: PlaybackRate;
   denoiseActionLabel: string;
   isInspectorOpen: boolean;
+  showSpectrogram: boolean;
   inspector: ReactNode;
   statusBar: ReactNode;
   children: ReactNode;

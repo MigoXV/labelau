@@ -11,6 +11,10 @@ import {
   parseAnnotationDocument,
   type LabelauAnnotationDocument,
 } from "../shared/annotations";
+import {
+  parseTextGridAnnotationText,
+  serializeTextGrid,
+} from "../shared/textgrid";
 import type {
   AnnotationSegment,
   LoadedAudioDocument,
@@ -39,13 +43,20 @@ export function deriveAnnotationPath(audioPath: string): string {
   return audioPath.slice(0, audioPath.length - extension.length) + ".labelau.json";
 }
 
+export function deriveTextGridPath(audioPath: string): string {
+  const extension = path.extname(audioPath);
+  return audioPath.slice(0, audioPath.length - extension.length) + ".TextGrid";
+}
+
 async function readAnnotationSegments(
   annotationPath: string,
   csvPath: string,
+  textGridPath: string,
 ): Promise<{
   segments: AnnotationSegment[];
   annotationPath: string | null;
   csvPath: string | null;
+  textGridPath: string | null;
 }> {
   if (await fileExists(annotationPath)) {
     const parsed = parseAnnotationDocument(
@@ -55,6 +66,16 @@ async function readAnnotationSegments(
       segments: parsed.segments,
       annotationPath,
       csvPath: (await fileExists(csvPath)) ? csvPath : null,
+      textGridPath: (await fileExists(textGridPath)) ? textGridPath : null,
+    };
+  }
+
+  if (await fileExists(textGridPath)) {
+    return {
+      segments: parseTextGridAnnotationText(await readFile(textGridPath, "utf8")),
+      annotationPath: null,
+      csvPath: (await fileExists(csvPath)) ? csvPath : null,
+      textGridPath,
     };
   }
 
@@ -63,6 +84,7 @@ async function readAnnotationSegments(
       segments: parseAuditionAnnotationText(await readFile(csvPath, "utf8")),
       annotationPath: null,
       csvPath,
+      textGridPath: null,
     };
   }
 
@@ -70,6 +92,7 @@ async function readAnnotationSegments(
     segments: [],
     annotationPath: null,
     csvPath: null,
+    textGridPath: null,
   };
 }
 
@@ -80,12 +103,18 @@ export async function loadDocument(
   const audioMeta = await readAudioMetadata(audioPath);
   const csvPath = deriveCsvPath(audioPath);
   const annotationPath = deriveAnnotationPath(audioPath);
-  const annotation = await readAnnotationSegments(annotationPath, csvPath);
+  const textGridPath = deriveTextGridPath(audioPath);
+  const annotation = await readAnnotationSegments(
+    annotationPath,
+    csvPath,
+    textGridPath,
+  );
 
   return {
     audioPath,
     csvPath: annotation.csvPath,
     annotationPath: annotation.annotationPath,
+    textGridPath: annotation.textGridPath,
     stem: path.basename(audioPath, path.extname(audioPath)),
     audioMeta,
     sampleRate: audioMeta.sampleRate,
@@ -106,14 +135,17 @@ export async function saveAnnotation(
   const csvPath = request.csvPath ?? deriveCsvPath(request.audioPath);
   const annotationPath =
     request.annotationPath ?? deriveAnnotationPath(request.audioPath);
+  const textGridPath = request.textGridPath ?? deriveTextGridPath(request.audioPath);
   const segments = hydrateAnnotationSegments(request.segments);
   const annotationDocument: LabelauAnnotationDocument = {
     version: 1,
     segments,
   };
+  const audioMeta = await readAudioMetadata(request.audioPath);
 
   await mkdir(path.dirname(csvPath), { recursive: true });
   await mkdir(path.dirname(annotationPath), { recursive: true });
+  await mkdir(path.dirname(textGridPath), { recursive: true });
   const text = serializeAuditionText(segments);
   await writeFile(csvPath, text, "utf8");
   await writeFile(
@@ -121,5 +153,10 @@ export async function saveAnnotation(
     `${JSON.stringify(annotationDocument, null, 2)}\n`,
     "utf8",
   );
-  return { csvPath, annotationPath };
+  await writeFile(
+    textGridPath,
+    serializeTextGrid(segments, audioMeta.durationSec),
+    "utf8",
+  );
+  return { csvPath, annotationPath, textGridPath };
 }

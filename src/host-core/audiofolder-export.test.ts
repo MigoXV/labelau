@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { serializeTextGrid } from "../shared/textgrid";
 import { exportAudioFolderArchive } from "./audiofolder-export";
 
 const cleanupPaths: string[] = [];
@@ -107,6 +108,54 @@ describe("exportAudioFolderArchive", () => {
     ]);
     expect(archive.file("test/dup.wav")).toBeTruthy();
     expect(archive.file("test/nested__dup.wav")).toBeTruthy();
+  });
+
+  it("exports audio files annotated only by TextGrid", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "labelau-audiofolder-"));
+    cleanupPaths.push(root);
+
+    await writeFile(path.join(root, "alpha.wav"), Buffer.from("wav"));
+    await writeFile(
+      path.join(root, "alpha.TextGrid"),
+      serializeTextGrid(
+        [{ startSec: 0.2, endSec: 0.6, transcript: "hello" }],
+        1,
+      ),
+      "utf8",
+    );
+
+    const result = await exportAudioFolderArchive({
+      rootPath: root,
+      audioPaths: [path.join(root, "alpha.wav")],
+      splitName: "test",
+    });
+    cleanupPaths.push(path.dirname(result.zipPath));
+
+    const archive = await loadArchive(result.zipPath);
+    const metadataText = await archive.file("test/metadata.jsonl")?.async("string");
+    const metadata = JSON.parse(metadataText?.trim() ?? "{}") as {
+      file_name: string;
+      transcripts: string[];
+      segments: Array<{
+        start: number;
+        end: number;
+        duration: number;
+        text: string;
+      }>;
+    };
+    expect(result.exportedCount).toBe(1);
+    expect(metadata).toMatchObject({
+      file_name: "alpha.wav",
+      transcripts: ["hello"],
+      segments: [
+        {
+          start: 0.2,
+          end: 0.6,
+          text: "hello",
+        },
+      ],
+    });
+    expect(metadata.segments[0]?.duration).toBeCloseTo(0.4, 6);
   });
 
   it("rejects audio paths outside the root path", async () => {

@@ -8,6 +8,7 @@ export interface DirtyDocumentForSave {
   audioPath: string;
   csvPath: string | null;
   annotationPath?: string | null;
+  textGridPath?: string | null;
   segments: AnnotationSegment[];
   stem: string;
 }
@@ -16,6 +17,7 @@ export interface SavedDirtyDocument {
   audioPath: string;
   csvPath: string;
   annotationPath?: string;
+  textGridPath?: string;
   stem: string;
 }
 
@@ -46,12 +48,14 @@ export async function saveDirtyDocuments({
       audioPath: document.audioPath,
       csvPath: document.csvPath,
       annotationPath: document.annotationPath,
+      textGridPath: document.textGridPath,
       segments: document.segments,
     });
     const savedDocument: SavedDirtyDocument = {
       audioPath,
       csvPath: result.csvPath,
       annotationPath: result.annotationPath,
+      textGridPath: result.textGridPath,
       stem: document.stem,
     };
 

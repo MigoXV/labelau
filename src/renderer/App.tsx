@@ -113,6 +113,7 @@ const MAX_AUTO_PRELOAD_DURATION_SEC = 90;
 const STORAGE_KEYS = {
   engineConfig: "engine-config",
   rootPath: "root-path",
+  showSpectrogram: "show-spectrogram",
   sidebarCollapsed: "sidebar-collapsed",
   sidebarWidth: "sidebar-width",
   uiTheme: "ui-theme",
@@ -206,8 +207,14 @@ export function App() {
     () => getWaveformTheme(effectiveUiThemeMode),
     [effectiveUiThemeMode],
   );
+  const initialShowSpectrogram = useMemo(
+    () => readStoredBoolean(STORAGE_KEYS.showSpectrogram, false),
+    [],
+  );
   const importDirectoryInputRef = useRef<HTMLInputElement | null>(null);
-  const spectrogramWorkerRef = useRef<SpectrogramWorkerClient | null>(null);
+  const spectrogramWorkerRef = useRef<SpectrogramWorkerClient | null>(
+    initialShowSpectrogram ? new SpectrogramWorkerClient() : null,
+  );
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const cacheRef = useRef(new Map<string, HydratedDocument>());
   const lruRef = useRef<string[]>([]);
@@ -239,6 +246,7 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [fileFilter, setFileFilter] = useState<FileFilter>("all");
   const [selectedAudioPath, setSelectedAudioPath] = useState<string | null>(null);
+  const [showSpectrogram, setShowSpectrogram] = useState(initialShowSpectrogram);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() =>
     readStoredBoolean(STORAGE_KEYS.sidebarCollapsed, false),
   );
@@ -349,6 +357,13 @@ export function App() {
   }, [uiThemePreference]);
 
   useEffect(() => {
+    writeStoredString(
+      STORAGE_KEYS.showSpectrogram,
+      showSpectrogram ? "true" : "false",
+    );
+  }, [showSpectrogram]);
+
+  useEffect(() => {
     writeStoredJson(STORAGE_KEYS.engineConfig, engineConfig);
   }, [engineConfig]);
 
@@ -381,7 +396,6 @@ export function App() {
   }, [bridge]);
 
   useEffect(() => {
-    spectrogramWorkerRef.current = new SpectrogramWorkerClient();
     audioRef.current = new Audio();
     audioRef.current.preload = "auto";
 
@@ -395,6 +409,14 @@ export function App() {
       }
     };
   }, [revokeDocumentUrls]);
+
+  const getSpectrogramWorker = useCallback(() => {
+    if (!spectrogramWorkerRef.current) {
+      spectrogramWorkerRef.current = new SpectrogramWorkerClient();
+    }
+
+    return spectrogramWorkerRef.current;
+  }, []);
 
   useEffect(() => {
     if (!audioRef.current) {
@@ -514,11 +536,6 @@ export function App() {
         waveformSampleRate: media.waveformSampleRate,
         activeAudioView: viewMode,
       }));
-      spectrogramWorkerRef.current?.loadDocument(
-        currentDocument.audioPath,
-        media.workerChannelData,
-        media.waveformSampleRate,
-      );
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = media.blobUrl;
@@ -796,11 +813,6 @@ export function App() {
         const cached = cacheRef.current.get(audioPath);
         if (cached) {
           touchCache(audioPath);
-          spectrogramWorkerRef.current?.loadDocument(
-            cached.audioPath,
-            cached.workerChannelData,
-            cached.waveformSampleRate,
-          );
           setCurrentDocument(cached);
           setTimeRange(getDefaultTimeRange(cached.durationSec));
           setFrequencyRange(getDefaultFrequencyRange(cached.waveformSampleRate));
@@ -834,11 +846,6 @@ export function App() {
         }
 
         cacheDocument(document);
-        spectrogramWorkerRef.current?.loadDocument(
-          document.audioPath,
-          document.workerChannelData,
-          document.waveformSampleRate,
-        );
         setCurrentDocument(document);
         setTimeRange(getDefaultTimeRange(document.durationSec));
         setFrequencyRange(getDefaultFrequencyRange(document.waveformSampleRate));
@@ -883,6 +890,29 @@ export function App() {
 
     void loadHydratedDocument(selectedAudioPath);
   }, [loadHydratedDocument, selectedAudioPath]);
+
+  useEffect(() => {
+    if (!currentDocument) {
+      return;
+    }
+
+    if (!showSpectrogram) {
+      spectrogramWorkerRef.current?.unloadDocument(currentDocument.audioPath);
+      return;
+    }
+
+    getSpectrogramWorker().loadDocument(
+      currentDocument.audioPath,
+      currentDocument.workerChannelData,
+      currentDocument.waveformSampleRate,
+    );
+  }, [
+    currentDocument?.audioPath,
+    currentDocument?.waveformSampleRate,
+    currentDocument?.workerChannelData,
+    getSpectrogramWorker,
+    showSpectrogram,
+  ]);
 
   const selectAudioPath = useCallback(
     (nextAudioPath: string) => {
@@ -1030,7 +1060,12 @@ export function App() {
   );
 
   const commitSavedDocument = useCallback(
-    (audioPath: string, csvPath: string, annotationPath?: string | null) => {
+    (
+      audioPath: string,
+      csvPath: string,
+      annotationPath?: string | null,
+      textGridPath?: string | null,
+    ) => {
       const cachedDocument = cacheRef.current.get(audioPath);
       if (!cachedDocument) {
         return;
@@ -1040,6 +1075,7 @@ export function App() {
         ...cachedDocument,
         csvPath,
         annotationPath: annotationPath ?? cachedDocument.annotationPath,
+        textGridPath: textGridPath ?? cachedDocument.textGridPath,
         savedSegments: cloneSegments(cachedDocument.segments),
         segmentHistory: [],
         isDirty: false,
@@ -1064,6 +1100,8 @@ export function App() {
         [audioPath]: {
           hasAnnotation: true,
           csvPath,
+          annotationPath: annotationPath ?? cachedDocument.annotationPath,
+          textGridPath: textGridPath ?? cachedDocument.textGridPath,
         },
       }));
     },
@@ -1081,10 +1119,16 @@ export function App() {
         audioPath: document.audioPath,
         csvPath: document.csvPath,
         annotationPath: document.annotationPath,
+        textGridPath: document.textGridPath,
         segments: document.segments,
       });
 
-      commitSavedDocument(audioPath, result.csvPath, result.annotationPath);
+      commitSavedDocument(
+        audioPath,
+        result.csvPath,
+        result.annotationPath,
+        result.textGridPath,
+      );
       return {
         audioPath,
         csvPath: result.csvPath,
@@ -1106,6 +1150,7 @@ export function App() {
         audioPath: document.audioPath,
         csvPath: document.csvPath,
         annotationPath: document.annotationPath,
+        textGridPath: document.textGridPath,
         segments: document.segments,
         stem: document.stem,
       });
@@ -1119,8 +1164,8 @@ export function App() {
         dirtyPaths,
         documentsByPath,
         saveAnnotation: bridge.saveAnnotation,
-        onSaved: ({ audioPath, csvPath, annotationPath }) => {
-          commitSavedDocument(audioPath, csvPath, annotationPath);
+        onSaved: ({ audioPath, csvPath, annotationPath, textGridPath }) => {
+          commitSavedDocument(audioPath, csvPath, annotationPath, textGridPath);
         },
       });
 
@@ -1402,11 +1447,6 @@ export function App() {
 
       cacheDocument(nextDocument);
       setCurrentDocument(nextDocument);
-      spectrogramWorkerRef.current?.loadDocument(
-        nextDocument.audioPath,
-        hydratedAudio.waveform.workerChannelData,
-        nextDocument.waveformSampleRate,
-      );
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = nextDocument.blobUrl;
@@ -2057,6 +2097,7 @@ export function App() {
               ? "降噪音频"
               : "原始音频"
             : null,
+          showSpectrogram ? "语谱图开启" : "语谱图关闭",
           `采样率 ${currentDocument.sampleRate} Hz · ${currentDocument.channelCount} 通道`,
           "快捷键",
         ].filter((chip): chip is string => Boolean(chip))
@@ -2135,83 +2176,87 @@ export function App() {
           setSelectedSegmentKey(segment ? getSegmentKey(segment) : null)
         }
       />
-      <div
-        className="editor-resizer"
-        onPointerDown={(event) => {
-          const rect = editorRef.current?.getBoundingClientRect();
-          if (!rect) {
-            return;
-          }
+      {showSpectrogram ? (
+        <>
+          <div
+            className="editor-resizer"
+            onPointerDown={(event) => {
+              const rect = editorRef.current?.getBoundingClientRect();
+              if (!rect) {
+                return;
+              }
 
-          editorResizeRef.current = {
-            startY: event.clientY,
-            startHeight: waveformHeight,
-            containerHeight: rect.height,
-          };
-          document.body.style.userSelect = "none";
-          document.body.style.cursor = "ns-resize";
-        }}
-      />
+              editorResizeRef.current = {
+                startY: event.clientY,
+                startHeight: waveformHeight,
+                containerHeight: rect.height,
+              };
+              document.body.style.userSelect = "none";
+              document.body.style.cursor = "ns-resize";
+            }}
+          />
 
-      <div className="spectrogram-shell">
-        <div className="spectrogram-header paper-spectrogram-header">
-          <div className="channel-picker">
-            {Array.from({ length: currentDocument.channelCount }, (_, index) => (
-              <button
-                key={index}
-                className={
-                  index === selectedChannel
-                    ? "channel-chip active"
-                    : "channel-chip"
-                }
-                onClick={() => setSelectedChannel(index)}
-              >
-                {currentDocument.channelLabels?.[index] ?? `声道 ${index + 1}`}
-              </button>
-            ))}
+          <div className="spectrogram-shell">
+            <div className="spectrogram-header paper-spectrogram-header">
+              <div className="channel-picker">
+                {Array.from({ length: currentDocument.channelCount }, (_, index) => (
+                  <button
+                    key={index}
+                    className={
+                      index === selectedChannel
+                        ? "channel-chip active"
+                        : "channel-chip"
+                    }
+                    onClick={() => setSelectedChannel(index)}
+                  >
+                    {currentDocument.channelLabels?.[index] ?? `声道 ${index + 1}`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <SpectrogramPanel
+              worker={spectrogramWorkerRef.current}
+              document={currentDocument}
+              selectedChannel={selectedChannel}
+              timeRange={timeRange}
+              frequencyRange={frequencyRange}
+              frequencyScale={frequencyScale as never}
+              playheadSec={playheadSec}
+              segments={currentSegments}
+              overlayGroups={segmentOverlayGroups}
+              heldTool={heldTool}
+              canvasTheme={canvasTheme}
+              onSeek={seekTo}
+              onSetTimeRange={(startSec, endSec) =>
+                setTimeRange(
+                  setWithinDuration(
+                    startSec,
+                    endSec,
+                    currentDocument.durationSec,
+                  ),
+                )
+              }
+              onSetFrequencyRange={(minFreq, maxFreq) =>
+                setFrequencyRange(
+                  setWithinNyquist(minFreq, maxFreq, currentNyquist),
+                )
+              }
+              onCommitSegment={(segment) =>
+                updateSegments((segments) =>
+                  heldTool === "erase"
+                    ? eraseSegment(segments, segment)
+                    : addSegment(segments, segment),
+                )
+              }
+              onAdjustSegment={adjustSegment}
+              onSelectSegment={(segment) =>
+                setSelectedSegmentKey(segment ? getSegmentKey(segment) : null)
+              }
+            />
           </div>
-        </div>
-
-        <SpectrogramPanel
-          worker={spectrogramWorkerRef.current}
-          document={currentDocument}
-          selectedChannel={selectedChannel}
-          timeRange={timeRange}
-          frequencyRange={frequencyRange}
-          frequencyScale={frequencyScale as never}
-          playheadSec={playheadSec}
-          segments={currentSegments}
-          overlayGroups={segmentOverlayGroups}
-          heldTool={heldTool}
-          canvasTheme={canvasTheme}
-          onSeek={seekTo}
-          onSetTimeRange={(startSec, endSec) =>
-            setTimeRange(
-              setWithinDuration(
-                startSec,
-                endSec,
-                currentDocument.durationSec,
-              ),
-            )
-          }
-          onSetFrequencyRange={(minFreq, maxFreq) =>
-            setFrequencyRange(
-              setWithinNyquist(minFreq, maxFreq, currentNyquist),
-            )
-          }
-          onCommitSegment={(segment) =>
-            updateSegments((segments) =>
-              heldTool === "erase"
-                ? eraseSegment(segments, segment)
-                : addSegment(segments, segment),
-            )
-          }
-          onAdjustSegment={adjustSegment}
-          onSelectSegment={(segment) =>
-            setSelectedSegmentKey(segment ? getSegmentKey(segment) : null)
-          }
-        />
-      </div>
+        </>
+      ) : null}
     </>
   ) : null;
 
@@ -2317,6 +2362,7 @@ export function App() {
         playbackRate={playbackRate}
         denoiseActionLabel={getDenoiseActionLabel()}
         isInspectorOpen={Boolean(currentDocument && isInspectorOpen)}
+        showSpectrogram={showSpectrogram}
         editorRef={editorRef}
         onOpenDirectory={() => void openDirectory()}
         onImportDirectory={handleImportDirectory}
@@ -2353,12 +2399,23 @@ export function App() {
             )}
             canUndo={Boolean(currentDocument?.segmentHistory.length && !isRunningAsr)}
             isExporting={isExporting}
+            showSpectrogram={showSpectrogram}
             uiThemePreference={uiThemePreference}
             onDiscardChanges={discardCurrentChanges}
             onExportDataset={() => void exportAudioFolder()}
             onOpenEngineSettings={() => setIsEngineSettingsOpen(true)}
             onOpenHelp={() => setIsHelpOpen(true)}
             onUndo={undoLastChange}
+            onToggleSpectrogram={() => {
+              setShowSpectrogram((previous) => {
+                if (previous) {
+                  return false;
+                }
+
+                getSpectrogramWorker();
+                return true;
+              });
+            }}
             onThemeChange={setUiThemePreference}
           />
         }

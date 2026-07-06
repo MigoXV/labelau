@@ -8,12 +8,14 @@ export function MoreActionsMenu({
   canExportDataset,
   canUndo,
   isExporting,
+  showSpectrogram,
   uiThemePreference,
   onDiscardChanges,
   onExportDataset,
   onOpenEngineSettings,
   onOpenHelp,
   onUndo,
+  onToggleSpectrogram,
   onThemeChange,
 }: MoreActionsMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -108,6 +110,15 @@ export function MoreActionsMenu({
 
           <div className="more-actions-group">
             <p>工具设置</p>
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={showSpectrogram}
+              onClick={onToggleSpectrogram}
+            >
+              <span>{showSpectrogram ? "隐藏语谱图" : "显示语谱图"}</span>
+              <em>{showSpectrogram ? "关闭后减少频谱计算" : "默认关闭以提升性能"}</em>
+            </button>
             <button
               type="button"
               role="menuitem"

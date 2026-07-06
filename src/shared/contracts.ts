@@ -23,6 +23,7 @@ export interface CorpusEntry {
   audioPath: string;
   csvPath: string | null;
   annotationPath?: string | null;
+  textGridPath?: string | null;
   relativeDir: string;
   stem: string;
   hasAnnotation: boolean;
@@ -54,6 +55,7 @@ export interface LoadedAudioDocument {
   audioPath: string;
   csvPath: string | null;
   annotationPath?: string | null;
+  textGridPath?: string | null;
   stem: string;
   audioMeta: AudioMeta;
   sampleRate: number;
@@ -68,12 +70,14 @@ export interface SaveAnnotationRequest {
   audioPath: string;
   csvPath?: string | null;
   annotationPath?: string | null;
+  textGridPath?: string | null;
   segments: AnnotationSegment[];
 }
 
 export interface SaveAnnotationResult {
   csvPath: string;
   annotationPath?: string;
+  textGridPath?: string;
 }
 
 export interface RunVadPreannotationRequest {
