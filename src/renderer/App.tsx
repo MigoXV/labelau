@@ -7,7 +7,6 @@ import {
   type ChangeEvent,
   type CSSProperties,
 } from "react";
-import { hydrateAudio } from "svara-ui/audio";
 import {
   buildUiThemeStyle,
   EngineSettingsDialog,
@@ -32,6 +31,7 @@ import {
   useSystemTheme,
 } from "svara-ui/labelau";
 
+import { hydrateFrontendAudio } from "./audio-hydration";
 import { getHostBridge } from "./bridge";
 import {
   saveDirtyDocuments,
@@ -304,7 +304,9 @@ export function App() {
       blobUrls.add(document.denoisedMedia.blobUrl);
     }
     for (const blobUrl of blobUrls) {
-      URL.revokeObjectURL(blobUrl);
+      if (blobUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(blobUrl);
+      }
     }
   }, []);
 
@@ -742,13 +744,12 @@ export function App() {
         return null;
       }
 
-      const hydratedAudio = await hydrateAudio(
+      const hydratedAudio = await hydrateFrontendAudio(
         loaded.audioUrl,
         Math.min(loaded.sampleRate, MAX_FRONTEND_SAMPLE_RATE),
         signal,
       );
       if (signal.aborted) {
-        URL.revokeObjectURL(hydratedAudio.blobUrl);
         return null;
       }
 
@@ -759,7 +760,7 @@ export function App() {
         segments,
         channelCount: hydratedAudio.waveform.workerChannelData.length,
         durationSec: hydratedAudio.waveform.durationSec,
-        blobUrl: hydratedAudio.blobUrl,
+        blobUrl: hydratedAudio.playbackUrl,
         workerChannelData: hydratedAudio.waveform.workerChannelData,
         waveformLevels: hydratedAudio.waveform.waveformLevels,
         waveformSampleRate: hydratedAudio.waveform.sampleRate,
@@ -769,7 +770,7 @@ export function App() {
         activeAudioView: "original",
         originalMedia: {
           audioUrl: loaded.audioUrl,
-          blobUrl: hydratedAudio.blobUrl,
+          blobUrl: hydratedAudio.playbackUrl,
           workerChannelData: hydratedAudio.waveform.workerChannelData,
           waveformLevels: hydratedAudio.waveform.waveformLevels,
           waveformSampleRate: hydratedAudio.waveform.sampleRate,
@@ -1371,13 +1372,13 @@ export function App() {
         audioPath: currentDocument.audioPath,
         denoiseGrpcUrl: engineConfig.denoiseGrpcUrl,
       });
-      const hydratedAudio = await hydrateAudio(
+      const hydratedAudio = await hydrateFrontendAudio(
         result.audioUrl,
         Math.min(result.sampleRate, MAX_FRONTEND_SAMPLE_RATE),
       );
       const denoisedMedia = {
         audioUrl: result.audioUrl,
-        blobUrl: hydratedAudio.blobUrl,
+        blobUrl: hydratedAudio.playbackUrl,
         workerChannelData: hydratedAudio.waveform.workerChannelData,
         waveformLevels: hydratedAudio.waveform.waveformLevels,
         waveformSampleRate: hydratedAudio.waveform.sampleRate,
