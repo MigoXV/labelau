@@ -80,6 +80,8 @@ function getSidebarStateLabel(state: EntryState): string {
       return "已完成";
     case "new":
       return "未处理";
+    default:
+      return "未处理";
   }
 }
 
@@ -91,6 +93,8 @@ function getSidebarStateTone(state: EntryState): string {
     case "saved":
       return "success";
     case "new":
+      return "neutral";
+    default:
       return "neutral";
   }
 }
