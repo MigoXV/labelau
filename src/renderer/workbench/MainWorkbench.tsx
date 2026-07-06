@@ -61,6 +61,7 @@ function getSubtitle(props: MainWorkbenchProps): string {
 
 function EmptyWorkbenchState({
   mode,
+  rootPath,
   datasetErrorMessage,
   onOpenDirectory,
   onImportDirectory,
@@ -68,6 +69,7 @@ function EmptyWorkbenchState({
 }: Pick<
   MainWorkbenchProps,
   | "mode"
+  | "rootPath"
   | "datasetErrorMessage"
   | "onOpenDirectory"
   | "onImportDirectory"
@@ -75,13 +77,20 @@ function EmptyWorkbenchState({
 >) {
   if (mode === "invalid-directory") {
     return (
-      <div className="workbench-empty-state">
-        <div className="workbench-empty-copy">
-          <p className="eyebrow">需要重新选择</p>
-          <h2>当前数据集目录不可用</h2>
-          <p>{datasetErrorMessage ?? "上次记住的目录不存在或已不在允许访问范围内。"}</p>
+      <div className="workbench-empty-state workbench-empty-state-centered">
+        <div className="workbench-empty-copy workbench-error-card">
+          <div className="workbench-empty-icon" aria-hidden="true">
+            !
+          </div>
+          <p className="eyebrow">目录不可用</p>
+          <h2>找不到上次打开的数据集目录</h2>
+          <p>上次记住的目录已经不存在或无法访问，你可以重新选择目录继续工作。</p>
+          {rootPath ? <code className="workbench-error-path">{rootPath}</code> : null}
+          {datasetErrorMessage ? (
+            <p className="workbench-error-detail">{datasetErrorMessage}</p>
+          ) : null}
           <div className="workbench-empty-actions">
-            <button type="button" className="ghost-button" onClick={onOpenDirectory}>
+            <button type="button" className="action-button" onClick={onOpenDirectory}>
               重新选择目录
             </button>
             <button
@@ -99,15 +108,18 @@ function EmptyWorkbenchState({
 
   if (mode === "no-directory") {
     return (
-      <div className="workbench-empty-state">
+      <div className="workbench-empty-state workbench-empty-state-centered">
         <div className="workbench-empty-copy">
+          <div className="workbench-empty-icon" aria-hidden="true">
+            ~
+          </div>
           <p className="eyebrow">开始工作</p>
           <h2>打开音频目录开始标注</h2>
           <p>
-            选择目录后，左侧会生成待标注队列。你可以逐条播放、切分片段、保存标注并导出数据集。
+            选择一个包含 WAV、FLAC 或 MP3 文件的目录后，LabelAU 会生成待标注队列。
           </p>
           <div className="workbench-empty-actions">
-            <button type="button" className="ghost-button" onClick={onOpenDirectory}>
+            <button type="button" className="action-button" onClick={onOpenDirectory}>
               打开目录
             </button>
             <button type="button" className="ghost-button" onClick={onImportDirectory}>
@@ -122,13 +134,18 @@ function EmptyWorkbenchState({
 
   if (mode === "empty-directory") {
     return (
-      <div className="workbench-empty-state">
+      <div className="workbench-empty-state workbench-empty-state-centered">
         <div className="workbench-empty-copy">
+          <div className="workbench-empty-icon" aria-hidden="true">
+            ~
+          </div>
           <p className="eyebrow">当前目录</p>
           <h2>当前目录没有可标注音频</h2>
-          <p>请导入音频，或切换到包含音频文件的目录。</p>
+          <p>
+            此目录中没有找到 WAV、FLAC 或 MP3 文件。你可以导入音频，或切换到包含音频文件的目录。
+          </p>
           <div className="workbench-empty-actions">
-            <button type="button" className="ghost-button" onClick={onImportDirectory}>
+            <button type="button" className="action-button" onClick={onImportDirectory}>
               导入音频
             </button>
             <button type="button" className="ghost-button" onClick={onOpenDirectory}>
@@ -241,6 +258,13 @@ export function MainWorkbench(props: MainWorkbenchProps) {
           </div>
         </div>
 
+        {props.mode === "invalid-directory" ? (
+          <div className="paper-alert paper-alert-error">
+            <span>目录不可用</span>
+            <strong>{props.datasetErrorMessage ?? "上次打开的数据集目录无法访问。"}</strong>
+          </div>
+        ) : null}
+
         {currentDocument ? (
           <div className="paper-controlbar">
             <div className="toolbar-controls paper-toolbar-controls">
@@ -338,6 +362,7 @@ export function MainWorkbench(props: MainWorkbenchProps) {
           ) : (
             <EmptyWorkbenchState
               mode={props.mode}
+              rootPath={props.rootPath}
               datasetErrorMessage={props.datasetErrorMessage}
               onOpenDirectory={props.onOpenDirectory}
               onImportDirectory={props.onImportDirectory}

@@ -8,7 +8,6 @@ import {
   type CSSProperties,
 } from "react";
 import { hydrateAudio } from "svara-ui/audio";
-import { ServerDirectoryBrowserDialog } from "svara-ui";
 import {
   buildUiThemeStyle,
   EngineSettingsDialog,
@@ -93,6 +92,7 @@ import { BottomStatusBar } from "./workbench/BottomStatusBar";
 import { MainWorkbench } from "./workbench/MainWorkbench";
 import { MoreActionsMenu } from "./workbench/MoreActionsMenu";
 import { RightInspector } from "./workbench/RightInspector";
+import { ServerDirectoryPickerDialog } from "./workbench/ServerDirectoryPickerDialog";
 import { TaskQueue } from "./workbench/TaskQueue";
 import type {
   DatasetState,
@@ -1490,6 +1490,58 @@ export function App() {
     [updateSegments],
   );
 
+  const deleteSegmentAtIndex = useCallback(
+    (segmentIndex: number) => {
+      updateSegments((segments) =>
+        segments.filter((_, index) => index !== segmentIndex),
+      );
+      setSelectedSegmentKey(null);
+    },
+    [updateSegments],
+  );
+
+  const mergeSegmentWithPrevious = useCallback(
+    (segmentIndex: number) => {
+      if (segmentIndex <= 0) {
+        return;
+      }
+
+      updateSegments((segments) => {
+        const previous = segments[segmentIndex - 1];
+        const current = segments[segmentIndex];
+        if (!previous || !current) {
+          return segments;
+        }
+
+        const mergedTranscript = [
+          previous.transcript?.trim(),
+          current.transcript?.trim(),
+        ]
+          .filter(Boolean)
+          .join(" ");
+
+        const mergedSegment: AnnotationSegment = {
+          ...previous,
+          endSec: Math.max(previous.endSec, current.endSec),
+          transcript: mergedTranscript,
+        };
+
+        return [
+          ...segments.slice(0, segmentIndex - 1),
+          mergedSegment,
+          ...segments.slice(segmentIndex + 1),
+        ];
+      });
+      setSelectedSegmentKey(null);
+    },
+    [updateSegments],
+  );
+
+  const listServerDirectoryForDialog = useCallback(
+    (path?: string) => bridge.listServerDirectory(path),
+    [bridge],
+  );
+
   const allEntries = useMemo(() => (tree ? flattenEntries(tree) : []), [tree]);
 
   const filteredTree = useMemo(() => {
@@ -2257,6 +2309,8 @@ export function App() {
             }
             currentStateLabel={currentStateLabel}
             onTranscriptChange={updateSegmentTranscript}
+            onDeleteSegment={deleteSegmentAtIndex}
+            onMergeSegmentWithPrevious={mergeSegmentWithPrevious}
             onToggle={() => setIsInspectorOpen((previous) => !previous)}
           />
         }
@@ -2273,10 +2327,9 @@ export function App() {
       ) : null}
 
       {isDirectoryBrowserOpen ? (
-        <ServerDirectoryBrowserDialog
-          isOpen={isDirectoryBrowserOpen}
+        <ServerDirectoryPickerDialog
           initialPath={datasetState === "invalid" ? "" : rootPath}
-          listDirectory={(path) => bridge.listServerDirectory(path)}
+          listDirectory={listServerDirectoryForDialog}
           onSelect={(path) => {
             setIsDirectoryBrowserOpen(false);
             void scanDirectory(path);

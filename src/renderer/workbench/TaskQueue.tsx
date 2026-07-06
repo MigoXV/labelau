@@ -83,6 +83,18 @@ function getSidebarStateLabel(state: EntryState): string {
   }
 }
 
+function getSidebarStateTone(state: EntryState): string {
+  switch (state) {
+    case "dirty":
+      return "warning";
+    case "matched":
+    case "saved":
+      return "success";
+    case "new":
+      return "neutral";
+  }
+}
+
 function flattenQueueEntries(tree: CorpusDirectory): CorpusEntry[] {
   return [
     ...tree.entries,
@@ -286,7 +298,7 @@ function AudioQueueItem({
           {getEntryDuration(entry)}
         </span>
       </span>
-      <span className={`audio-queue-state ${state}`}>
+      <span className={`audio-queue-state ${state} ${getSidebarStateTone(state)}`}>
         {getSidebarStateLabel(state)}
       </span>
     </button>
@@ -303,6 +315,7 @@ function AudioQueue({
   entryOverrides,
   selectedAudioPath,
   treePanelRef,
+  searchQuery,
   onClearFilters,
   onImportDirectory,
   onSelectEntry,
@@ -317,12 +330,14 @@ function AudioQueue({
   | "entryOverrides"
   | "selectedAudioPath"
   | "treePanelRef"
+  | "searchQuery"
   | "onClearFilters"
   | "onImportDirectory"
   | "onSelectEntry"
 >) {
   const entries = tree ? flattenQueueEntries(tree) : [];
   const isFilterEmpty = stats.all > 0 && entries.length === 0;
+  const isSearchEmpty = isFilterEmpty && searchQuery.trim().length > 0;
   const canImport =
     Boolean(rootPath) && (datasetState === "ready" || datasetState === "empty");
 
@@ -348,8 +363,8 @@ function AudioQueue({
           ))
         ) : isFilterEmpty ? (
           <div className="audio-queue-empty">
-            <h3>当前筛选下没有音频</h3>
-            <p>切换筛选条件或清除搜索关键词</p>
+            <h3>{isSearchEmpty ? "没有匹配的音频文件" : "当前筛选下没有音频"}</h3>
+            <p>{isSearchEmpty ? "换一个文件名或目录关键词再试。" : "切换筛选条件或清除搜索关键词。"}</p>
             <button type="button" className="text-button" onClick={onClearFilters}>
               清空筛选
             </button>
@@ -572,6 +587,7 @@ export function TaskQueue({
             entryOverrides={entryOverrides}
             selectedAudioPath={selectedAudioPath}
             treePanelRef={treePanelRef}
+            searchQuery={searchQuery}
             onClearFilters={onClearFilters}
             onImportDirectory={onImportDirectory}
             onSelectEntry={onSelectEntry}
@@ -581,6 +597,22 @@ export function TaskQueue({
       ) : (
         <div className="sidebar-panel sidebar-panel-search">
           <SidebarHeader />
+          <DirectorySummary
+            rootPath={rootPath}
+            datasetState={datasetState}
+            datasetErrorMessage={datasetErrorMessage}
+            stats={stats}
+            isScanning={isScanning}
+            onRefreshDirectory={onRefreshDirectory}
+          />
+          <DirectoryActions
+            rootPath={rootPath}
+            datasetState={datasetState}
+            isScanning={isScanning}
+            onOpenDirectory={onOpenDirectory}
+            onImportDirectory={onImportDirectory}
+            onClearRememberedDirectory={onClearRememberedDirectory}
+          />
           <QueueSearch
             stats={stats}
             searchQuery={searchQuery}
@@ -596,6 +628,7 @@ export function TaskQueue({
             entryOverrides={entryOverrides}
             selectedAudioPath={selectedAudioPath}
             treePanelRef={treePanelRef}
+            searchQuery={searchQuery}
             onClearFilters={onClearFilters}
             onImportDirectory={onImportDirectory}
             onSelectEntry={onSelectEntry}

@@ -134,5 +134,7 @@ export interface RightInspectorProps {
   selectedSegmentIndex: number | null;
   currentStateLabel: string;
   onTranscriptChange: (index: number, transcript: string) => void;
+  onDeleteSegment: (index: number) => void;
+  onMergeSegmentWithPrevious: (index: number) => void;
   onToggle: () => void;
 }

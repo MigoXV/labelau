@@ -51,6 +51,12 @@ export function MoreActionsMenu({
     setIsOpen(false);
   };
 
+  const exportReason = canExportDataset
+    ? null
+    : "需要先有已保存的标注数据";
+  const discardReason = canDiscardChanges ? null : "当前无未保存修改";
+  const undoReason = canUndo ? null : "当前没有可撤销操作";
+
   return (
     <div className="more-actions" ref={menuRef}>
       <button
@@ -65,44 +71,62 @@ export function MoreActionsMenu({
 
       {isOpen ? (
         <div className="more-actions-panel" role="menu">
-          <button
-            type="button"
-            role="menuitem"
-            disabled={!canUndo}
-            onClick={() => runAndClose(onUndo)}
-          >
-            撤销上一步
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={!canDiscardChanges}
-            onClick={() => runAndClose(onDiscardChanges)}
-          >
-            舍弃未保存更改
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={!canExportDataset}
-            onClick={() => runAndClose(onExportDataset)}
-          >
-            {isExporting ? "导出中" : "导出标注数据集"}
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => runAndClose(onOpenEngineSettings)}
-          >
-            引擎设置
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => runAndClose(onOpenHelp)}
-          >
-            帮助
-          </button>
+          <div className="more-actions-group">
+            <p>文件操作</p>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!canExportDataset || isExporting}
+              title={exportReason ?? undefined}
+              onClick={() => runAndClose(onExportDataset)}
+            >
+              <span>{isExporting ? "导出中" : "导出标注数据"}</span>
+              {exportReason ? <em>{exportReason}</em> : null}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!canUndo}
+              title={undoReason ?? undefined}
+              onClick={() => runAndClose(onUndo)}
+            >
+              <span>撤销上一步</span>
+              {undoReason ? <em>{undoReason}</em> : null}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="danger-menu-item"
+              disabled={!canDiscardChanges}
+              title={discardReason ?? undefined}
+              onClick={() => runAndClose(onDiscardChanges)}
+            >
+              <span>舍弃未保存更改</span>
+              {discardReason ? <em>{discardReason}</em> : null}
+            </button>
+          </div>
+
+          <div className="more-actions-group">
+            <p>工具设置</p>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => runAndClose(onOpenEngineSettings)}
+            >
+              <span>引擎设置</span>
+            </button>
+          </div>
+
+          <div className="more-actions-group">
+            <p>帮助与外观</p>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => runAndClose(onOpenHelp)}
+            >
+              <span>帮助</span>
+            </button>
+          </div>
 
           <div className="more-actions-theme">
             <ThemeControl
