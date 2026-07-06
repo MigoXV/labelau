@@ -39,7 +39,10 @@ import {
 } from "./close-flow";
 import { HELP_SECTIONS } from "../shared/help-content";
 import { SpectrogramWorkerClient } from "./worker-client";
-import { MIN_TIME_WINDOW_SEC } from "../shared/constants";
+import {
+  MAX_FRONTEND_SAMPLE_RATE,
+  MIN_TIME_WINDOW_SEC,
+} from "../shared/constants";
 import type {
   AnnotationSegment,
   CorpusEntry,
@@ -106,6 +109,7 @@ const EMPTY_ENGINE_CONFIG: EngineConfig = {
   denoiseGrpcUrl: "",
 };
 const DOCUMENT_CACHE_LIMIT = 8;
+const MAX_AUTO_PRELOAD_DURATION_SEC = 90;
 const STORAGE_KEYS = {
   engineConfig: "engine-config",
   rootPath: "root-path",
@@ -740,7 +744,7 @@ export function App() {
 
       const hydratedAudio = await hydrateAudio(
         loaded.audioUrl,
-        loaded.sampleRate,
+        Math.min(loaded.sampleRate, MAX_FRONTEND_SAMPLE_RATE),
         signal,
       );
       if (signal.aborted) {
@@ -791,6 +795,11 @@ export function App() {
         const cached = cacheRef.current.get(audioPath);
         if (cached) {
           touchCache(audioPath);
+          spectrogramWorkerRef.current?.loadDocument(
+            cached.audioPath,
+            cached.workerChannelData,
+            cached.waveformSampleRate,
+          );
           setCurrentDocument(cached);
           setTimeRange(getDefaultTimeRange(cached.durationSec));
           setFrequencyRange(getDefaultFrequencyRange(cached.waveformSampleRate));
@@ -1362,7 +1371,10 @@ export function App() {
         audioPath: currentDocument.audioPath,
         denoiseGrpcUrl: engineConfig.denoiseGrpcUrl,
       });
-      const hydratedAudio = await hydrateAudio(result.audioUrl, result.sampleRate);
+      const hydratedAudio = await hydrateAudio(
+        result.audioUrl,
+        Math.min(result.sampleRate, MAX_FRONTEND_SAMPLE_RATE),
+      );
       const denoisedMedia = {
         audioUrl: result.audioUrl,
         blobUrl: hydratedAudio.blobUrl,
@@ -1723,6 +1735,14 @@ export function App() {
       return;
     }
 
+    const nextDurationSec = nextEntry.audioMeta.durationSec;
+    if (
+      !Number.isFinite(nextDurationSec) ||
+      nextDurationSec > MAX_AUTO_PRELOAD_DURATION_SEC
+    ) {
+      return;
+    }
+
     const abortController = new AbortController();
     preloadAbortRef.current = abortController;
     let didStartPreload = false;
@@ -1755,11 +1775,6 @@ export function App() {
           }
 
           cacheDocument(document);
-          spectrogramWorkerRef.current?.loadDocument(
-            document.audioPath,
-            document.workerChannelData,
-            document.waveformSampleRate,
-          );
         })
         .catch(() => {
           // Preload failures should not interrupt the active labeling flow.
@@ -1783,7 +1798,13 @@ export function App() {
         }
       }
     };
-  }, [cacheDocument, hydrateDocumentForCache, nextEntry?.audioPath, revokeDocumentUrls]);
+  }, [
+    cacheDocument,
+    hydrateDocumentForCache,
+    nextEntry?.audioMeta.durationSec,
+    nextEntry?.audioPath,
+    revokeDocumentUrls,
+  ]);
 
   useEffect(() => {
     if (!isHelpOpen) {

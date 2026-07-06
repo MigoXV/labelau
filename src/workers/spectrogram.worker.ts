@@ -276,11 +276,14 @@ self.onmessage = (event: MessageEvent<IncomingMessage>) => {
   const key = JSON.stringify(payload);
   const pixels = cache.get(key) ?? cacheResult(key, renderSpectrogram(document, payload));
 
-  self.postMessage({
-    kind: "rendered",
-    requestId: payload.requestId,
-    width: payload.width,
-    height: payload.height,
-    pixels,
-  });
+  self.postMessage(
+    {
+      kind: "rendered",
+      requestId: payload.requestId,
+      width: payload.width,
+      height: payload.height,
+      pixels,
+    },
+    [pixels.buffer],
+  );
 };

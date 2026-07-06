@@ -40,6 +40,23 @@ type WorkerResponse =
       pixels: Uint8ClampedArray;
     };
 
+type RenderRequest = Omit<
+  Extract<WorkerRequest, { kind: "render" }>,
+  "kind" | "requestId"
+>;
+
+type RenderPayload = {
+  width: number;
+  height: number;
+  pixels: Uint8ClampedArray;
+};
+
+type LatestRenderJob = {
+  requestId: number;
+  request: RenderRequest;
+  resolve: (imageData: ImageData | null) => void;
+};
+
 export class SpectrogramWorkerClient {
   private worker = new Worker(
     new URL("../workers/spectrogram.worker.ts", import.meta.url),
@@ -48,10 +65,9 @@ export class SpectrogramWorkerClient {
 
   private requestId = 0;
   private latestRenderRequestId = 0;
-  private pending = new Map<
-    number,
-    (payload: { width: number; height: number; pixels: Uint8ClampedArray }) => void
-  >();
+  private latestRenderInFlightRequestId: number | null = null;
+  private queuedLatestRender: LatestRenderJob | null = null;
+  private pending = new Map<number, (payload: RenderPayload) => void>();
 
   constructor() {
     this.worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
@@ -67,6 +83,11 @@ export class SpectrogramWorkerClient {
 
       this.pending.delete(payload.requestId);
       resolver(payload);
+
+      if (payload.requestId === this.latestRenderInFlightRequestId) {
+        this.latestRenderInFlightRequestId = null;
+        this.flushQueuedLatestRender();
+      }
     };
   }
 
@@ -96,7 +117,7 @@ export class SpectrogramWorkerClient {
     } satisfies WorkerRequest);
   }
 
-  render(request: Omit<Extract<WorkerRequest, { kind: "render" }>, "kind" | "requestId">) {
+  render(request: RenderRequest) {
     const requestId = ++this.requestId;
     this.worker.postMessage({
       kind: "render",
@@ -106,35 +127,57 @@ export class SpectrogramWorkerClient {
 
     return new Promise<ImageData>((resolve) => {
       this.pending.set(requestId, ({ width, height, pixels }) => {
-        resolve(new ImageData(new Uint8ClampedArray(pixels), width, height));
+        resolve(new ImageData(pixels, width, height));
       });
     });
   }
 
-  renderLatest(
-    request: Omit<Extract<WorkerRequest, { kind: "render" }>, "kind" | "requestId">,
-  ) {
+  renderLatest(request: RenderRequest) {
     const requestId = ++this.requestId;
     this.latestRenderRequestId = requestId;
-    this.worker.postMessage({
-      kind: "render",
-      requestId,
-      ...request,
-    } satisfies WorkerRequest);
 
     return new Promise<ImageData | null>((resolve) => {
-      this.pending.set(requestId, ({ width, height, pixels }) => {
-        if (requestId !== this.latestRenderRequestId) {
-          resolve(null);
-          return;
-        }
+      const job: LatestRenderJob = { requestId, request, resolve };
+      if (this.latestRenderInFlightRequestId === null) {
+        this.postLatestRender(job);
+        return;
+      }
 
-        resolve(new ImageData(new Uint8ClampedArray(pixels), width, height));
-      });
+      this.queuedLatestRender?.resolve(null);
+      this.queuedLatestRender = job;
     });
+  }
+
+  private postLatestRender(job: LatestRenderJob): void {
+    this.latestRenderInFlightRequestId = job.requestId;
+    this.pending.set(job.requestId, ({ width, height, pixels }) => {
+      if (job.requestId !== this.latestRenderRequestId) {
+        job.resolve(null);
+        return;
+      }
+
+      job.resolve(new ImageData(pixels, width, height));
+    });
+    this.worker.postMessage({
+      kind: "render",
+      requestId: job.requestId,
+      ...job.request,
+    } satisfies WorkerRequest);
+  }
+
+  private flushQueuedLatestRender(): void {
+    const job = this.queuedLatestRender;
+    if (!job) {
+      return;
+    }
+
+    this.queuedLatestRender = null;
+    this.postLatestRender(job);
   }
 
   dispose(): void {
+    this.queuedLatestRender?.resolve(null);
+    this.queuedLatestRender = null;
     this.pending.clear();
     this.worker.terminate();
   }
