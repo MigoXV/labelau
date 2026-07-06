@@ -548,7 +548,10 @@ export function App() {
   }, [currentDocument?.denoisedMedia, switchAudioView]);
 
   const scanDirectory = useCallback(
-    async (nextRootPath: string) => {
+    async (
+      nextRootPath: string,
+      options?: { fallbackToDefaultOnFailure?: boolean },
+    ) => {
       setIsScanning(true);
       setDatasetState("scanning");
       setRootPath(nextRootPath);
@@ -607,6 +610,46 @@ export function App() {
         setDirtyPaths(new Set());
         setSavedPaths(new Set());
         setEntryOverrides({});
+
+        if (options?.fallbackToDefaultOnFailure) {
+          removeStoredValue(STORAGE_KEYS.rootPath);
+
+          try {
+            const defaultListing = await bridge.listServerDirectory();
+            const defaultRootPath = defaultListing.currentPath;
+            const { tree: defaultTree, warnings } =
+              await bridge.scanDirectory(defaultRootPath);
+            const flattened = flattenEntries(defaultTree);
+
+            setTree(defaultTree);
+            setRootPath(defaultRootPath);
+            setDatasetState(flattened.length > 0 ? "ready" : "empty");
+            writeStoredString(STORAGE_KEYS.rootPath, defaultRootPath);
+            setStatusMessage(
+              flattened.length > 0
+                ? `已切换到默认目录，载入 ${flattened.length} 个可用音频`
+                : "已切换到默认目录，未找到可导入的音频",
+            );
+            setErrorMessage(
+              warnings.length > 0
+                ? flattened.length > 0
+                  ? `已载入 ${flattened.length} 个可用音频，跳过 ${warnings.length} 个不支持文件`
+                  : `未发现可导入的音频，已跳过 ${warnings.length} 个不支持文件`
+                : null,
+            );
+            setDatasetErrorMessage(null);
+            setSelectedAudioPath(flattened[0]?.audioPath ?? null);
+            return;
+          } catch {
+            setRootPath("");
+            setDatasetState("none");
+            setDatasetErrorMessage(null);
+            setStatusMessage("请打开音频目录开始标注");
+            setErrorMessage(null);
+            return;
+          }
+        }
+
         setDatasetState("invalid");
         setDatasetErrorMessage(`当前数据集目录不可用：${message}`);
         setStatusMessage("当前数据集目录不可用，请重新选择目录");
@@ -642,7 +685,7 @@ export function App() {
       setDatasetState("none");
       return;
     }
-    void scanDirectory(rememberedRootPath);
+    void scanDirectory(rememberedRootPath, { fallbackToDefaultOnFailure: true });
   }, [scanDirectory]);
 
   const importAudioFiles = useCallback(
