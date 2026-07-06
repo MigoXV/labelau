@@ -17,9 +17,12 @@ import type {
 
 export type WorkbenchMode =
   | "no-directory"
+  | "invalid-directory"
   | "empty-directory"
   | "no-selection"
   | "ready";
+
+export type DatasetState = "none" | "scanning" | "ready" | "empty" | "invalid";
 
 export interface TaskQueueStats {
   all: number;
@@ -43,6 +46,8 @@ export interface StatusBarViewModel {
 
 export interface TaskQueueProps {
   rootPath: string;
+  datasetState: DatasetState;
+  datasetErrorMessage: string | null;
   tree: CorpusEntryTree | null;
   stats: TaskQueueStats;
   isSidebarCollapsed: boolean;
@@ -59,6 +64,7 @@ export interface TaskQueueProps {
   onImportDirectory: () => void;
   onImportDirectoryChange: React.ChangeEventHandler<HTMLInputElement>;
   onRefreshDirectory: () => void;
+  onClearRememberedDirectory: () => void;
   onToggleSidebar: () => void;
   onSearchQueryChange: (value: string) => void;
   onFileFilterChange: (filter: FileFilter) => void;
@@ -83,6 +89,7 @@ export interface MoreActionsMenuProps {
 export interface MainWorkbenchProps {
   mode: WorkbenchMode;
   rootPath: string;
+  datasetErrorMessage: string | null;
   currentDocument: HydratedDocument | null;
   selectedFileContext: SelectedFileContext | null;
   selectedSegment: AnnotationSegment | null;
@@ -105,6 +112,7 @@ export interface MainWorkbenchProps {
   children: ReactNode;
   onOpenDirectory: () => void;
   onImportDirectory: () => void;
+  onClearRememberedDirectory: () => void;
   onSelectPrevious: () => void;
   onSelectNext: () => void;
   onSaveCurrent: () => void;

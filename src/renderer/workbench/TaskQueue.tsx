@@ -39,8 +39,17 @@ function getDirectoryName(rootPath: string): string {
 
 function getDirectoryStatus({
   rootPath,
+  datasetState,
   stats,
-}: Pick<TaskQueueProps, "rootPath" | "stats">): string {
+}: Pick<TaskQueueProps, "rootPath" | "datasetState" | "stats">): string {
+  if (datasetState === "invalid") {
+    return "目录不可用 · 请重新选择";
+  }
+
+  if (datasetState === "scanning") {
+    return "正在扫描目录";
+  }
+
   if (!rootPath) {
     return "选择一个包含音频文件的目录开始标注";
   }
@@ -94,18 +103,32 @@ function SidebarHeader() {
 
 function DirectorySummary({
   rootPath,
+  datasetState,
+  datasetErrorMessage,
   stats,
   isScanning,
   onRefreshDirectory,
 }: Pick<
   TaskQueueProps,
-  "rootPath" | "stats" | "isScanning" | "onRefreshDirectory"
+  | "rootPath"
+  | "datasetState"
+  | "datasetErrorMessage"
+  | "stats"
+  | "isScanning"
+  | "onRefreshDirectory"
 >) {
   return (
-    <section className="directory-summary" title={rootPath || undefined}>
+    <section
+      className={
+        datasetState === "invalid"
+          ? "directory-summary directory-summary-invalid"
+          : "directory-summary"
+      }
+      title={(datasetErrorMessage ?? rootPath) || undefined}
+    >
       <div className="directory-summary-main">
         <strong>{getDirectoryName(rootPath)}</strong>
-        <span>{getDirectoryStatus({ rootPath, stats })}</span>
+        <span>{getDirectoryStatus({ rootPath, datasetState, stats })}</span>
       </div>
       {rootPath ? (
         <button
@@ -125,25 +148,46 @@ function DirectorySummary({
 
 function DirectoryActions({
   rootPath,
+  datasetState,
   isScanning,
   onOpenDirectory,
   onImportDirectory,
+  onClearRememberedDirectory,
 }: Pick<
   TaskQueueProps,
-  "rootPath" | "isScanning" | "onOpenDirectory" | "onImportDirectory"
+  | "rootPath"
+  | "datasetState"
+  | "isScanning"
+  | "onOpenDirectory"
+  | "onImportDirectory"
+  | "onClearRememberedDirectory"
 >) {
+  const canImport =
+    Boolean(rootPath) &&
+    !isScanning &&
+    (datasetState === "ready" || datasetState === "empty");
+
   return (
     <div className="directory-actions">
       <button className="ghost-button" onClick={onOpenDirectory}>
-        打开目录
+        {rootPath ? "更换目录" : "打开目录"}
       </button>
       <button
         className="ghost-button"
-        disabled={!rootPath || isScanning}
+        disabled={!canImport}
         onClick={onImportDirectory}
       >
         导入音频
       </button>
+      {datasetState === "invalid" ? (
+        <button
+          className="ghost-button"
+          type="button"
+          onClick={onClearRememberedDirectory}
+        >
+          清除路径
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -251,6 +295,7 @@ function AudioQueueItem({
 
 function AudioQueue({
   rootPath,
+  datasetState,
   tree,
   stats,
   dirtyPaths,
@@ -264,6 +309,7 @@ function AudioQueue({
 }: Pick<
   TaskQueueProps,
   | "rootPath"
+  | "datasetState"
   | "tree"
   | "stats"
   | "dirtyPaths"
@@ -277,6 +323,8 @@ function AudioQueue({
 >) {
   const entries = tree ? flattenQueueEntries(tree) : [];
   const isFilterEmpty = stats.all > 0 && entries.length === 0;
+  const canImport =
+    Boolean(rootPath) && (datasetState === "ready" || datasetState === "empty");
 
   return (
     <section className="audio-queue">
@@ -308,9 +356,13 @@ function AudioQueue({
           </div>
         ) : (
           <div className="audio-queue-empty">
-            <h3>暂无音频任务</h3>
-            <p>打开包含音频的目录后，待标注文件会按顺序出现在这里。</p>
-            {rootPath ? (
+            <h3>{datasetState === "invalid" ? "目录不可用" : "暂无音频任务"}</h3>
+            <p>
+              {datasetState === "invalid"
+                ? "请重新选择目录，或清除已记住路径后重新开始。"
+                : "打开包含音频的目录后，待标注文件会按顺序出现在这里。"}
+            </p>
+            {canImport ? (
               <button
                 type="button"
                 className="text-button"
@@ -326,10 +378,17 @@ function AudioQueue({
   );
 }
 
-function SidebarFooter({ rootPath }: Pick<TaskQueueProps, "rootPath">) {
+function SidebarFooter({
+  rootPath,
+  datasetState,
+}: Pick<TaskQueueProps, "rootPath" | "datasetState">) {
   return (
     <footer className="sidebar-footer">
-      {rootPath ? "Space 播放 · M 标注 · S 保存 · E 擦除" : "尚未打开工作目录"}
+      {datasetState === "invalid"
+        ? "目录不可用，请重新选择"
+        : rootPath
+          ? "Space 播放 · M 标注 · S 保存 · E 擦除"
+          : "尚未打开工作目录"}
     </footer>
   );
 }
@@ -409,6 +468,8 @@ function SidebarShell({
 
 export function TaskQueue({
   rootPath,
+  datasetState,
+  datasetErrorMessage,
   tree,
   stats,
   isSidebarCollapsed,
@@ -425,6 +486,7 @@ export function TaskQueue({
   onImportDirectory,
   onImportDirectoryChange,
   onRefreshDirectory,
+  onClearRememberedDirectory,
   onToggleSidebar,
   onSearchQueryChange,
   onFileFilterChange,
@@ -481,15 +543,19 @@ export function TaskQueue({
           <SidebarHeader />
           <DirectorySummary
             rootPath={rootPath}
+            datasetState={datasetState}
+            datasetErrorMessage={datasetErrorMessage}
             stats={stats}
             isScanning={isScanning}
             onRefreshDirectory={onRefreshDirectory}
           />
           <DirectoryActions
             rootPath={rootPath}
+            datasetState={datasetState}
             isScanning={isScanning}
             onOpenDirectory={onOpenDirectory}
             onImportDirectory={onImportDirectory}
+            onClearRememberedDirectory={onClearRememberedDirectory}
           />
           <QueueFilters
             stats={stats}
@@ -498,6 +564,7 @@ export function TaskQueue({
           />
           <AudioQueue
             rootPath={rootPath}
+            datasetState={datasetState}
             tree={tree}
             stats={stats}
             dirtyPaths={dirtyPaths}
@@ -509,7 +576,7 @@ export function TaskQueue({
             onImportDirectory={onImportDirectory}
             onSelectEntry={onSelectEntry}
           />
-          <SidebarFooter rootPath={rootPath} />
+          <SidebarFooter rootPath={rootPath} datasetState={datasetState} />
         </div>
       ) : (
         <div className="sidebar-panel sidebar-panel-search">
@@ -521,6 +588,7 @@ export function TaskQueue({
           />
           <AudioQueue
             rootPath={rootPath}
+            datasetState={datasetState}
             tree={tree}
             stats={stats}
             dirtyPaths={dirtyPaths}
@@ -532,7 +600,7 @@ export function TaskQueue({
             onImportDirectory={onImportDirectory}
             onSelectEntry={onSelectEntry}
           />
-          <SidebarFooter rootPath={rootPath} />
+          <SidebarFooter rootPath={rootPath} datasetState={datasetState} />
         </div>
       )}
     </SidebarShell>

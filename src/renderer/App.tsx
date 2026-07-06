@@ -75,6 +75,7 @@ import {
   readStoredJson,
   readStoredNumber,
   readStoredString,
+  removeStoredValue,
   writeStoredJson,
   writeStoredNumber,
   writeStoredString,
@@ -93,7 +94,11 @@ import { MainWorkbench } from "./workbench/MainWorkbench";
 import { MoreActionsMenu } from "./workbench/MoreActionsMenu";
 import { RightInspector } from "./workbench/RightInspector";
 import { TaskQueue } from "./workbench/TaskQueue";
-import type { StatusBarViewModel, WorkbenchMode } from "./workbench/types";
+import type {
+  DatasetState,
+  StatusBarViewModel,
+  WorkbenchMode,
+} from "./workbench/types";
 
 const EMPTY_ENGINE_CONFIG: EngineConfig = {
   vadGrpcUrl: "",
@@ -222,6 +227,10 @@ export function App() {
   const [rootPath, setRootPath] = useState(() =>
     readStoredString(STORAGE_KEYS.rootPath),
   );
+  const [datasetState, setDatasetState] = useState<DatasetState>(() =>
+    readStoredString(STORAGE_KEYS.rootPath) ? "scanning" : "none",
+  );
+  const [datasetErrorMessage, setDatasetErrorMessage] = useState<string | null>(null);
   const [tree, setTree] = useState<CorpusEntryTree | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [fileFilter, setFileFilter] = useState<FileFilter>("all");
@@ -280,6 +289,7 @@ export function App() {
   const loadRequestIdRef = useRef(0);
   const loadAbortRef = useRef<AbortController | null>(null);
   const closeFlowInFlightRef = useRef(false);
+  const didValidateStoredRootRef = useRef(false);
 
   const revokeDocumentUrls = useCallback((document: HydratedDocument) => {
     const blobUrls = new Set<string>([
@@ -294,6 +304,40 @@ export function App() {
     }
   }, []);
 
+  const resetDatasetSelection = useCallback(() => {
+    loadAbortRef.current?.abort();
+    preloadAbortRef.current?.abort();
+    preloadingDocumentRef.current = null;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.removeAttribute("src");
+      audioRef.current.load();
+    }
+    for (const document of cacheRef.current.values()) {
+      revokeDocumentUrls(document);
+      spectrogramWorkerRef.current?.unloadDocument(document.audioPath);
+    }
+    cacheRef.current.clear();
+    lruRef.current = [];
+    setRootPath("");
+    setDatasetState("none");
+    setDatasetErrorMessage(null);
+    setTree(null);
+    setCurrentDocument(null);
+    setSelectedAudioPath(null);
+    setSelectedSegmentKey(null);
+    setDirtyPaths(new Set());
+    setSavedPaths(new Set());
+    setEntryOverrides({});
+    setSearchQuery("");
+    setFileFilter("all");
+    setPlayheadSec(0);
+    setIsPlaying(false);
+    setStatusMessage("已清除记住的数据集路径");
+    setErrorMessage(null);
+    removeStoredValue(STORAGE_KEYS.rootPath);
+  }, [revokeDocumentUrls]);
+
   useEffect(() => {
     writeStoredString(STORAGE_KEYS.uiTheme, uiThemePreference);
   }, [uiThemePreference]);
@@ -301,10 +345,6 @@ export function App() {
   useEffect(() => {
     writeStoredJson(STORAGE_KEYS.engineConfig, engineConfig);
   }, [engineConfig]);
-
-  useEffect(() => {
-    writeStoredString(STORAGE_KEYS.rootPath, rootPath);
-  }, [rootPath]);
 
   useEffect(() => {
     writeStoredString(
@@ -510,7 +550,10 @@ export function App() {
   const scanDirectory = useCallback(
     async (nextRootPath: string) => {
       setIsScanning(true);
+      setDatasetState("scanning");
+      setRootPath(nextRootPath);
       setErrorMessage(null);
+      setDatasetErrorMessage(null);
 
       try {
         const { tree: nextTree, warnings } = await bridge.scanDirectory(nextRootPath);
@@ -518,6 +561,8 @@ export function App() {
 
         setTree(nextTree);
         setRootPath(nextRootPath);
+        setDatasetState(flattened.length > 0 ? "ready" : "empty");
+        writeStoredString(STORAGE_KEYS.rootPath, nextRootPath);
         setStatusMessage(
           flattened.length > 0
             ? `已载入 ${flattened.length} 个可用音频`
@@ -540,12 +585,37 @@ export function App() {
 
         setSelectedAudioPath(flattened[0]?.audioPath ?? null);
       } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : "扫描目录失败");
+        const message = error instanceof Error ? error.message : "扫描目录失败";
+        loadAbortRef.current?.abort();
+        preloadAbortRef.current?.abort();
+        preloadingDocumentRef.current = null;
+        if (audioRef.current) {
+          audioRef.current.pause();
+          audioRef.current.removeAttribute("src");
+          audioRef.current.load();
+        }
+        for (const document of cacheRef.current.values()) {
+          revokeDocumentUrls(document);
+          spectrogramWorkerRef.current?.unloadDocument(document.audioPath);
+        }
+        cacheRef.current.clear();
+        lruRef.current = [];
+        setTree(null);
+        setCurrentDocument(null);
+        setSelectedAudioPath(null);
+        setSelectedSegmentKey(null);
+        setDirtyPaths(new Set());
+        setSavedPaths(new Set());
+        setEntryOverrides({});
+        setDatasetState("invalid");
+        setDatasetErrorMessage(`当前数据集目录不可用：${message}`);
+        setStatusMessage("当前数据集目录不可用，请重新选择目录");
+        setErrorMessage(`当前数据集目录不可用：${message}`);
       } finally {
         setIsScanning(false);
       }
     },
-    [bridge, selectedAudioPath],
+    [bridge, revokeDocumentUrls, selectedAudioPath],
   );
 
   const openDirectory = useCallback(async () => {
@@ -562,9 +632,22 @@ export function App() {
     await scanDirectory(pickedPath);
   }, [bridge, scanDirectory]);
 
+  useEffect(() => {
+    if (didValidateStoredRootRef.current) {
+      return;
+    }
+    didValidateStoredRootRef.current = true;
+    const rememberedRootPath = readStoredString(STORAGE_KEYS.rootPath);
+    if (!rememberedRootPath) {
+      setDatasetState("none");
+      return;
+    }
+    void scanDirectory(rememberedRootPath);
+  }, [scanDirectory]);
+
   const importAudioFiles = useCallback(
     async (files: File[], onProgress?: (progressPercent: number) => void) => {
-      if (!rootPath) {
+      if (!rootPath || (datasetState !== "ready" && datasetState !== "empty")) {
         throw new Error("请先打开或输入一个服务器目录");
       }
 
@@ -573,8 +656,20 @@ export function App() {
       await scanDirectory(result.rootPath);
       return result;
     },
-    [bridge, rootPath, scanDirectory],
+    [bridge, datasetState, rootPath, scanDirectory],
   );
+
+  const clearRememberedDirectory = useCallback(() => {
+    if (dirtyPaths.size > 0) {
+      const shouldClear = window.confirm(
+        "当前存在未保存修改。清除已记住路径会关闭当前数据集并丢弃这些未保存状态，是否继续？",
+      );
+      if (!shouldClear) {
+        return;
+      }
+    }
+    resetDatasetSelection();
+  }, [dirtyPaths.size, resetDatasetSelection]);
 
   const handleImportDirectory = useCallback(() => {
     importDirectoryInputRef.current?.click();
@@ -1426,9 +1521,10 @@ export function App() {
       ),
     [allEntries, entryOverrides],
   );
+  const datasetIsUsable = datasetState === "ready" || datasetState === "empty";
 
   const exportAudioFolder = useCallback(async () => {
-    if (!rootPath || annotatedEntries.length === 0 || isExporting) {
+    if (!datasetIsUsable || !rootPath || annotatedEntries.length === 0 || isExporting) {
       return;
     }
 
@@ -1470,7 +1566,7 @@ export function App() {
     } finally {
       setIsExporting(false);
     }
-  }, [annotatedEntries, bridge, dirtyPaths, isExporting, rootPath]);
+  }, [annotatedEntries, bridge, datasetIsUsable, dirtyPaths, isExporting, rootPath]);
 
   const fileStats = useMemo(() => {
     return allEntries.reduce(
@@ -1818,13 +1914,16 @@ export function App() {
           stateLabel: currentStateLabel,
         }
       : null;
-  const workbenchMode: WorkbenchMode = !rootPath || !tree
-    ? "no-directory"
-    : fileStats.all === 0
-      ? "empty-directory"
-      : currentDocument
-        ? "ready"
-        : "no-selection";
+  const workbenchMode: WorkbenchMode =
+    datasetState === "invalid"
+      ? "invalid-directory"
+      : datasetState === "none" || datasetState === "scanning" || !rootPath || !tree
+        ? "no-directory"
+        : datasetState === "empty" || fileStats.all === 0
+          ? "empty-directory"
+          : currentDocument
+            ? "ready"
+            : "no-selection";
   const taskQueueTree = fileStats.all === 0 ? null : filteredTree;
   const statusBarViewModel: StatusBarViewModel = {
     timeLabel: currentDocument
@@ -1845,22 +1944,30 @@ export function App() {
           "快捷键",
         ].filter((chip): chip is string => Boolean(chip))
       : [
-          workbenchMode === "no-directory"
-            ? "尚未打开工作目录"
-            : workbenchMode === "empty-directory"
-              ? "当前目录无可标注音频"
-              : "请选择左侧音频",
+          workbenchMode === "invalid-directory"
+            ? "数据集目录不可用"
+            : workbenchMode === "no-directory"
+              ? datasetState === "scanning"
+                ? "正在扫描目录"
+                : "尚未打开工作目录"
+              : workbenchMode === "empty-directory"
+                ? "当前目录无可标注音频"
+                : "请选择左侧音频",
           "快捷键",
         ],
     message:
       errorMessage ??
-      (workbenchMode === "no-directory"
-        ? "尚未打开工作目录"
-        : workbenchMode === "empty-directory"
-          ? "当前目录无可标注音频"
-          : workbenchMode === "no-selection"
-            ? "请选择左侧音频"
-            : statusMessage),
+      (workbenchMode === "invalid-directory"
+        ? datasetErrorMessage ?? "当前数据集目录不可用"
+        : workbenchMode === "no-directory"
+          ? datasetState === "scanning"
+            ? "正在扫描目录"
+            : "尚未打开工作目录"
+          : workbenchMode === "empty-directory"
+            ? "当前目录无可标注音频"
+            : workbenchMode === "no-selection"
+              ? "请选择左侧音频"
+              : statusMessage),
     isError: Boolean(errorMessage),
   };
 
@@ -2022,6 +2129,8 @@ export function App() {
     >
       <TaskQueue
         rootPath={rootPath}
+        datasetState={datasetState}
+        datasetErrorMessage={datasetErrorMessage}
         tree={taskQueueTree}
         stats={fileStats}
         isSidebarCollapsed={isSidebarCollapsed}
@@ -2042,6 +2151,7 @@ export function App() {
             void scanDirectory(rootPath);
           }
         }}
+        onClearRememberedDirectory={clearRememberedDirectory}
         onToggleSidebar={() => setIsSidebarCollapsed((previous) => !previous)}
         onSearchQueryChange={setSearchQuery}
         onFileFilterChange={setFileFilter}
@@ -2068,6 +2178,7 @@ export function App() {
       <MainWorkbench
         mode={workbenchMode}
         rootPath={rootPath}
+        datasetErrorMessage={datasetErrorMessage}
         currentDocument={currentDocument}
         selectedFileContext={selectedFileContext}
         selectedSegment={selectedSegment}
@@ -2092,6 +2203,7 @@ export function App() {
         editorRef={editorRef}
         onOpenDirectory={() => void openDirectory()}
         onImportDirectory={handleImportDirectory}
+        onClearRememberedDirectory={clearRememberedDirectory}
         onSelectPrevious={() =>
           previousEntry ? selectAudioPath(previousEntry.audioPath) : undefined
         }
@@ -2120,7 +2232,7 @@ export function App() {
                 !isDenoising,
             )}
             canExportDataset={Boolean(
-              rootPath && annotatedEntries.length > 0 && !isExporting,
+              datasetIsUsable && rootPath && annotatedEntries.length > 0 && !isExporting,
             )}
             canUndo={Boolean(currentDocument?.segmentHistory.length && !isRunningAsr)}
             isExporting={isExporting}
@@ -2163,7 +2275,7 @@ export function App() {
       {isDirectoryBrowserOpen ? (
         <ServerDirectoryBrowserDialog
           isOpen={isDirectoryBrowserOpen}
-          initialPath={rootPath}
+          initialPath={datasetState === "invalid" ? "" : rootPath}
           listDirectory={(path) => bridge.listServerDirectory(path)}
           onSelect={(path) => {
             setIsDirectoryBrowserOpen(false);

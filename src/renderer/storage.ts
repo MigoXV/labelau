@@ -20,6 +20,10 @@ export function writeStoredString(key: string, value: string): void {
   getStorage()?.setItem(`${STORAGE_PREFIX}${key}`, value);
 }
 
+export function removeStoredValue(key: string): void {
+  getStorage()?.removeItem(`${STORAGE_PREFIX}${key}`);
+}
+
 export function readStoredNumber(
   key: string,
   fallbackValue: number,

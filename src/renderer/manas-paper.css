@@ -285,6 +285,10 @@
   line-height: 1.4;
 }
 
+.directory-summary-invalid span {
+  color: var(--paper-danger);
+}
+
 .directory-refresh-button {
   width: 28px;
   min-width: 28px;

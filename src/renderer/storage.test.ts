@@ -4,6 +4,7 @@ import {
   readStoredJson,
   readStoredNumber,
   readStoredString,
+  removeStoredValue,
   writeStoredJson,
   writeStoredNumber,
   writeStoredString,
@@ -69,5 +70,13 @@ describe("renderer storage", () => {
     expect(readStoredJson("bad-json", { ok: true })).toEqual({ ok: true });
     expect(readStoredNumber("missing", 320)).toBe(320);
     expect(readStoredNumber("too-small", 320, { min: 240, max: 520 })).toBe(240);
+  });
+
+  it("removes stored values with the LabelAU prefix", () => {
+    writeStoredString("root-path", "/missing");
+    removeStoredValue("root-path");
+
+    expect(readStoredString("root-path")).toBe("");
+    expect(window.localStorage.getItem("labelau:root-path")).toBeNull();
   });
 });

@@ -21,6 +21,8 @@ function getTitle(props: MainWorkbenchProps): string {
   switch (props.mode) {
     case "no-directory":
       return "打开音频目录开始标注";
+    case "invalid-directory":
+      return "数据集目录不可用";
     case "empty-directory":
       return "当前目录没有可标注音频";
     case "no-selection":
@@ -44,6 +46,8 @@ function getSubtitle(props: MainWorkbenchProps): string {
   switch (props.mode) {
     case "no-directory":
       return "选择一个包含音频文件的目录后，LabelAU 会生成待标注队列。";
+    case "invalid-directory":
+      return props.datasetErrorMessage ?? "上次使用的目录无法访问，请重新选择。";
     case "empty-directory":
       return "请导入音频，或切换到包含音频文件的目录。";
     case "no-selection":
@@ -57,9 +61,42 @@ function getSubtitle(props: MainWorkbenchProps): string {
 
 function EmptyWorkbenchState({
   mode,
+  datasetErrorMessage,
   onOpenDirectory,
   onImportDirectory,
-}: Pick<MainWorkbenchProps, "mode" | "onOpenDirectory" | "onImportDirectory">) {
+  onClearRememberedDirectory,
+}: Pick<
+  MainWorkbenchProps,
+  | "mode"
+  | "datasetErrorMessage"
+  | "onOpenDirectory"
+  | "onImportDirectory"
+  | "onClearRememberedDirectory"
+>) {
+  if (mode === "invalid-directory") {
+    return (
+      <div className="workbench-empty-state">
+        <div className="workbench-empty-copy">
+          <p className="eyebrow">需要重新选择</p>
+          <h2>当前数据集目录不可用</h2>
+          <p>{datasetErrorMessage ?? "上次记住的目录不存在或已不在允许访问范围内。"}</p>
+          <div className="workbench-empty-actions">
+            <button type="button" className="ghost-button" onClick={onOpenDirectory}>
+              重新选择目录
+            </button>
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={onClearRememberedDirectory}
+            >
+              清除已记住路径
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (mode === "no-directory") {
     return (
       <div className="workbench-empty-state">
@@ -301,8 +338,10 @@ export function MainWorkbench(props: MainWorkbenchProps) {
           ) : (
             <EmptyWorkbenchState
               mode={props.mode}
+              datasetErrorMessage={props.datasetErrorMessage}
               onOpenDirectory={props.onOpenDirectory}
               onImportDirectory={props.onImportDirectory}
+              onClearRememberedDirectory={props.onClearRememberedDirectory}
             />
           )}
         </section>
