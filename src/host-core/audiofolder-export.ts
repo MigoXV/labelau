@@ -4,10 +4,14 @@ import { tmpdir } from "node:os";
 
 import JSZip from "jszip";
 
-import { parseAuditionText } from "../shared/audition";
-import type { ExportAudioFolderRequest, VadSegment } from "../shared/contracts";
+import { parseAuditionAnnotationText } from "../shared/audition";
+import { parseAnnotationDocument } from "../shared/annotations";
+import type {
+  AnnotationSegment,
+  ExportAudioFolderRequest,
+} from "../shared/contracts";
 
-import { deriveCsvPath, fileExists } from "./documents";
+import { deriveAnnotationPath, deriveCsvPath, fileExists } from "./documents";
 
 export interface ExportedAudioFolderArchive {
   exportedCount: number;
@@ -20,7 +24,7 @@ interface ExportableAudioSample {
   extension: string;
   fileName: string;
   id: string;
-  segments: VadSegment[];
+  segments: AnnotationSegment[];
 }
 
 function assertWithinRoot(rootPath: string, targetPath: string): void {
@@ -47,11 +51,27 @@ function sanitizeFilePart(value: string): string {
     .replace(/^-|-$/g, "");
 }
 
-function normalizeSegmentsForMetadata(segments: VadSegment[]) {
+function normalizeSegmentsForMetadata(segments: AnnotationSegment[]) {
   return {
     starts: segments.map((segment) => segment.startSec),
     durations: segments.map((segment) => segment.endSec - segment.startSec),
   };
+}
+
+async function readExportSegments(audioPath: string): Promise<AnnotationSegment[]> {
+  const annotationPath = deriveAnnotationPath(audioPath);
+  if (await fileExists(annotationPath)) {
+    return parseAnnotationDocument(
+      JSON.parse(await readFile(annotationPath, "utf8")) as unknown,
+    ).segments;
+  }
+
+  const csvPath = deriveCsvPath(audioPath);
+  if (!(await fileExists(csvPath))) {
+    return [];
+  }
+
+  return parseAuditionAnnotationText(await readFile(csvPath, "utf8"));
 }
 
 function resolveAudioFileName(
@@ -94,12 +114,7 @@ async function collectExportableSamples(
     const resolvedAudioPath = path.resolve(audioPath);
     assertWithinRoot(rootPath, resolvedAudioPath);
 
-    const csvPath = deriveCsvPath(resolvedAudioPath);
-    if (!(await fileExists(csvPath))) {
-      continue;
-    }
-
-    const segments = parseAuditionText(await readFile(csvPath, "utf8"));
+    const segments = await readExportSegments(resolvedAudioPath);
     if (segments.length === 0) {
       continue;
     }
@@ -148,6 +163,13 @@ export async function exportAudioFolderArchive(
         file_name: sample.fileName,
         id: sample.id,
         seconds: normalizeSegmentsForMetadata(sample.segments),
+        transcripts: sample.segments.map((segment) => segment.transcript ?? ""),
+        segments: sample.segments.map((segment) => ({
+          start: segment.startSec,
+          end: segment.endSec,
+          duration: segment.endSec - segment.startSec,
+          text: segment.transcript ?? "",
+        })),
       }),
     );
   }

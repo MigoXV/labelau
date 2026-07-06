@@ -6,9 +6,11 @@ import type {
   LoadedAudioDocument,
   ScanDirectoryResult,
   ServerDirectoryListing,
+  AnnotationSegment,
   DenoiseAudioRequest,
   DenoiseAudioResult,
   EngineConfig,
+  RunAsrPreannotationRequest,
   RunVadPreannotationRequest,
   SaveAnnotationRequest,
   SaveAnnotationResult,
@@ -137,6 +139,9 @@ export const browserHostBridge: HostBridge = {
   runVadPreannotation(request: RunVadPreannotationRequest) {
     return postJson<VadSegment[]>("/api/runVadPreannotation", request);
   },
+  runAsrPreannotation(request: RunAsrPreannotationRequest) {
+    return postJson<AnnotationSegment[]>("/api/runAsrPreannotation", request);
+  },
   async denoiseAudio(request: DenoiseAudioRequest) {
     const result = await postJson<DenoiseAudioResult>("/api/denoiseAudio", request);
     return {
@@ -151,11 +156,11 @@ export const browserHostBridge: HostBridge = {
     try {
       const response = await fetch(endpoint);
       if (!response.ok) {
-        return { vadGrpcUrl: "", denoiseGrpcUrl: "" };
+        return { vadGrpcUrl: "", asrGrpcUrl: "", denoiseGrpcUrl: "" };
       }
       return response.json() as Promise<EngineConfig>;
     } catch {
-      return { vadGrpcUrl: "", denoiseGrpcUrl: "" };
+      return { vadGrpcUrl: "", asrGrpcUrl: "", denoiseGrpcUrl: "" };
     }
   },
   testEngineConnection(request: TestEngineConnectionRequest) {

@@ -22,6 +22,7 @@ import {
   denoiseAudio,
   getDenoisedAudio,
   getEngineConfigDefaults,
+  runAsrPreannotation,
   runVadPreannotation,
   testEngineConnection,
 } from "../host-core/engines";
@@ -193,6 +194,33 @@ app.post("/api/runVadPreannotation", async (request, response) => {
   } catch (error) {
     response.status(500).json({
       error: error instanceof Error ? error.message : "Failed to run VAD",
+    });
+  }
+});
+
+app.post("/api/runAsrPreannotation", async (request, response) => {
+  try {
+    const audioPath = String(request.body?.audioPath ?? "");
+    if (!audioPath) {
+      response.status(400).json({ error: "audioPath is required" });
+      return;
+    }
+
+    const segments = await runAsrPreannotation({
+      audioPath,
+      audioContentBase64:
+        typeof request.body?.audioContentBase64 === "string"
+          ? request.body.audioContentBase64
+          : undefined,
+      asrGrpcUrl:
+        typeof request.body?.asrGrpcUrl === "string"
+          ? request.body.asrGrpcUrl
+          : undefined,
+    });
+    response.json(segments);
+  } catch (error) {
+    response.status(500).json({
+      error: error instanceof Error ? error.message : "Failed to run ASR",
     });
   }
 });

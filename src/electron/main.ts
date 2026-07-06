@@ -24,6 +24,7 @@ import {
   denoiseAudio,
   getDenoisedAudio,
   getEngineConfigDefaults,
+  runAsrPreannotation,
   runVadPreannotation,
   testEngineConnection,
 } from "../host-core/engines";
@@ -99,7 +100,7 @@ async function registerProtocol(): Promise<void> {
         return new Response("Not found", { status: 404 });
       }
 
-      return new Response(bytes, {
+      return new Response(new Uint8Array(bytes), {
         headers: {
           "content-type": "audio/wav",
         },
@@ -116,7 +117,7 @@ async function registerProtocol(): Promise<void> {
     }
 
     const bytes = await readFile(audioPath);
-    return new Response(bytes, {
+    return new Response(new Uint8Array(bytes), {
       headers: {
         "content-type": getAudioMimeType(audioPath),
       },
@@ -157,6 +158,10 @@ async function registerIpcHandlers(): Promise<void> {
 
   ipcMain.handle("host:runVadPreannotation", async (_event, request) => {
     return runVadPreannotation(request);
+  });
+
+  ipcMain.handle("host:runAsrPreannotation", async (_event, request) => {
+    return runAsrPreannotation(request);
   });
 
   ipcMain.handle("host:denoiseAudio", async (_event, request) => {

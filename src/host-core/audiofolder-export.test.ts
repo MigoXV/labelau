@@ -58,6 +58,15 @@ describe("exportAudioFolderArchive", () => {
           starts: [0.5],
           durations: [0.25],
         },
+        transcripts: [""],
+        segments: [
+          {
+            start: 0.5,
+            end: 0.75,
+            duration: 0.25,
+            text: "",
+          },
+        ],
       }),
     );
   });

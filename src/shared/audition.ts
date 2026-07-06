@@ -1,4 +1,5 @@
-import type { VadSegment } from "./contracts";
+import type { AnnotationSegment, VadSegment } from "./contracts";
+import { hydrateAnnotationSegments } from "./annotations";
 import { normalizeSegments } from "./vad";
 
 const AUDITION_COLUMNS = [
@@ -84,9 +85,37 @@ export function parseAuditionText(text: string): VadSegment[] {
   );
 }
 
-export function serializeAuditionText(segments: VadSegment[]): string {
+export function parseAuditionAnnotationText(text: string): AnnotationSegment[] {
+  const { header, rows } = parseTable(text);
+  const startIndex = columnIndex(header, "Start");
+  const durationIndex = columnIndex(header, "Duration");
+  const descriptionIndex = header.findIndex((column) => column === "Description");
+
+  return hydrateAnnotationSegments(
+    rows.map((row, index) => {
+      const startSec = auditionTimeToSeconds(row[startIndex] ?? "0:00.000");
+      const durationSec = auditionTimeToSeconds(
+        row[durationIndex] ?? "0:00.000",
+      );
+
+      return {
+        id: `csv_${index}`,
+        startSec,
+        endSec: startSec + durationSec,
+        transcript:
+          descriptionIndex >= 0 ? (row[descriptionIndex] ?? "").trim() : "",
+      };
+    }),
+  );
+}
+
+function sanitizeCell(value: string): string {
+  return value.replace(/\r?\n/g, " ").replace(/\t/g, " ").trim();
+}
+
+export function serializeAuditionText(segments: AnnotationSegment[]): string {
   const lines = [AUDITION_COLUMNS.join("\t")];
-  const normalized = normalizeSegments(segments);
+  const normalized = hydrateAnnotationSegments(segments);
 
   normalized.forEach((segment, index) => {
     const duration = segment.endSec - segment.startSec;
@@ -97,7 +126,7 @@ export function serializeAuditionText(segments: VadSegment[]): string {
         secondsToAuditionTime(duration),
         "decimal",
         "Cue",
-        "",
+        sanitizeCell(segment.transcript ?? ""),
       ].join("\t"),
     );
   });

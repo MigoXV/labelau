@@ -14,9 +14,15 @@ export interface VadSegment {
   endSec: number;
 }
 
+export interface AnnotationSegment extends VadSegment {
+  id?: string;
+  transcript?: string;
+}
+
 export interface CorpusEntry {
   audioPath: string;
   csvPath: string | null;
+  annotationPath?: string | null;
   relativeDir: string;
   stem: string;
   hasAnnotation: boolean;
@@ -47,12 +53,13 @@ export interface ScanDirectoryResult {
 export interface LoadedAudioDocument {
   audioPath: string;
   csvPath: string | null;
+  annotationPath?: string | null;
   stem: string;
   audioMeta: AudioMeta;
   sampleRate: number;
   channelCount: number;
   durationSec: number;
-  segments: VadSegment[];
+  segments: AnnotationSegment[];
   channelLabels?: string[];
   audioUrl: string;
 }
@@ -60,17 +67,25 @@ export interface LoadedAudioDocument {
 export interface SaveAnnotationRequest {
   audioPath: string;
   csvPath?: string | null;
-  segments: VadSegment[];
+  annotationPath?: string | null;
+  segments: AnnotationSegment[];
 }
 
 export interface SaveAnnotationResult {
   csvPath: string;
+  annotationPath?: string;
 }
 
 export interface RunVadPreannotationRequest {
   audioPath: string;
   audioContentBase64?: string;
   vadGrpcUrl?: string;
+}
+
+export interface RunAsrPreannotationRequest {
+  audioPath: string;
+  audioContentBase64?: string;
+  asrGrpcUrl?: string;
 }
 
 export interface DenoiseAudioRequest {
@@ -88,10 +103,11 @@ export interface DenoiseAudioResult {
 
 export interface EngineConfig {
   vadGrpcUrl: string;
+  asrGrpcUrl: string;
   denoiseGrpcUrl: string;
 }
 
-export type EngineKind = "vad" | "denoise";
+export type EngineKind = "vad" | "asr" | "denoise";
 
 export interface TestEngineConnectionRequest {
   engine: EngineKind;
@@ -148,6 +164,9 @@ export interface HostBridge {
   runVadPreannotation(
     request: RunVadPreannotationRequest,
   ): Promise<VadSegment[]>;
+  runAsrPreannotation(
+    request: RunAsrPreannotationRequest,
+  ): Promise<AnnotationSegment[]>;
   denoiseAudio(request: DenoiseAudioRequest): Promise<DenoiseAudioResult>;
   getEngineConfigDefaults(): Promise<EngineConfig>;
   testEngineConnection(

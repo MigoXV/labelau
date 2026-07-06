@@ -2,23 +2,27 @@ import type { VadSegment } from "./contracts";
 
 const EPSILON = 1e-9;
 
-export function normalizeSegment(segment: VadSegment): VadSegment | null {
+export function normalizeSegment<TSegment extends VadSegment>(
+  segment: TSegment,
+): TSegment | null {
   const startSec = Math.min(segment.startSec, segment.endSec);
   const endSec = Math.max(segment.startSec, segment.endSec);
   if (endSec - startSec <= EPSILON) {
     return null;
   }
 
-  return { startSec, endSec };
+  return { ...segment, startSec, endSec };
 }
 
-export function normalizeSegments(segments: VadSegment[]): VadSegment[] {
+export function normalizeSegments<TSegment extends VadSegment>(
+  segments: TSegment[],
+): TSegment[] {
   const normalized = segments
     .map(normalizeSegment)
-    .filter((segment): segment is VadSegment => Boolean(segment))
+    .filter((segment): segment is TSegment => Boolean(segment))
     .sort((left, right) => left.startSec - right.startSec);
 
-  const result: VadSegment[] = [];
+  const result: TSegment[] = [];
 
   for (const segment of normalized) {
     const previous = result.at(-1);
@@ -33,28 +37,28 @@ export function normalizeSegments(segments: VadSegment[]): VadSegment[] {
   return result;
 }
 
-export function addSegment(
-  segments: VadSegment[],
+export function addSegment<TSegment extends VadSegment>(
+  segments: TSegment[],
   draftSegment: VadSegment,
-): VadSegment[] {
+): TSegment[] {
   const normalized = normalizeSegment(draftSegment);
   if (!normalized) {
     return normalizeSegments(segments);
   }
 
-  return normalizeSegments([...segments, normalized]);
+  return normalizeSegments([...segments, normalized as TSegment]);
 }
 
-export function eraseSegment(
-  segments: VadSegment[],
+export function eraseSegment<TSegment extends VadSegment>(
+  segments: TSegment[],
   draftSegment: VadSegment,
-): VadSegment[] {
+): TSegment[] {
   const normalized = normalizeSegment(draftSegment);
   if (!normalized) {
     return normalizeSegments(segments);
   }
 
-  const result: VadSegment[] = [];
+  const result: TSegment[] = [];
 
   for (const segment of normalizeSegments(segments)) {
     if (
@@ -67,6 +71,7 @@ export function eraseSegment(
 
     if (normalized.startSec > segment.startSec + EPSILON) {
       result.push({
+        ...segment,
         startSec: segment.startSec,
         endSec: normalized.startSec,
       });
@@ -74,6 +79,7 @@ export function eraseSegment(
 
     if (normalized.endSec < segment.endSec - EPSILON) {
       result.push({
+        ...segment,
         startSec: normalized.endSec,
         endSec: segment.endSec,
       });
@@ -83,11 +89,11 @@ export function eraseSegment(
   return normalizeSegments(result);
 }
 
-export function replaceSegment(
-  segments: VadSegment[],
+export function replaceSegment<TSegment extends VadSegment>(
+  segments: TSegment[],
   index: number,
   draftSegment: VadSegment,
-): VadSegment[] {
+): TSegment[] {
   if (index < 0 || index >= segments.length) {
     return normalizeSegments(segments);
   }
@@ -98,5 +104,5 @@ export function replaceSegment(
     return normalizeSegments(nextSegments);
   }
 
-  return normalizeSegments([...nextSegments, normalized]);
+  return normalizeSegments([...nextSegments, normalized as TSegment]);
 }

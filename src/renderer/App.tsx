@@ -17,7 +17,6 @@ import {
   HelpDialog,
   resolveUiThemeMode,
   centerElementInScrollContainer,
-  cloneSegments,
   formatSeconds,
   getDefaultFrequencyRange,
   getDefaultTimeRange,
@@ -26,12 +25,10 @@ import {
   getSegmentKey,
   getSegmentOverlayGroups,
   getToolLabel,
-  segmentsEqual,
   setWithinDuration,
   setWithinNyquist,
   SpectrogramPanel,
   WaveformPanel,
-  type EngineConfig,
   type UiThemePreference,
   useSystemTheme,
 } from "svara-ui/labelau";
@@ -45,12 +42,21 @@ import { HELP_SECTIONS } from "../shared/help-content";
 import { SpectrogramWorkerClient } from "./worker-client";
 import { MIN_TIME_WINDOW_SEC } from "../shared/constants";
 import type {
+  AnnotationSegment,
   CorpusEntry,
   CorpusEntryTree,
+  EngineConfig,
   FrequencyScale,
   HostBridge,
   VadSegment,
 } from "../shared/contracts";
+import {
+  annotationSegmentsEqual,
+  assertNonOverlappingSegments,
+  cloneAnnotationSegments,
+  createSegmentId,
+  hydrateAnnotationSegments,
+} from "../shared/annotations";
 import { clamp } from "../shared/math";
 import { filterTree, flattenEntries } from "../shared/tree";
 import {
@@ -91,6 +97,7 @@ import type { StatusBarViewModel, WorkbenchMode } from "./workbench/types";
 
 const EMPTY_ENGINE_CONFIG: EngineConfig = {
   vadGrpcUrl: "",
+  asrGrpcUrl: "",
   denoiseGrpcUrl: "",
 };
 const DOCUMENT_CACHE_LIMIT = 8;
@@ -111,6 +118,8 @@ function readStoredEngineConfig(): EngineConfig {
   return {
     vadGrpcUrl:
       typeof parsedValue.vadGrpcUrl === "string" ? parsedValue.vadGrpcUrl : "",
+    asrGrpcUrl:
+      typeof parsedValue.asrGrpcUrl === "string" ? parsedValue.asrGrpcUrl : "",
     denoiseGrpcUrl:
       typeof parsedValue.denoiseGrpcUrl === "string"
         ? parsedValue.denoiseGrpcUrl
@@ -139,6 +148,34 @@ function getNextFrequencyScale(value: FrequencyScale): FrequencyScale {
     case "log":
       return "linear";
   }
+}
+
+function cloneSegments(segments: AnnotationSegment[]): AnnotationSegment[] {
+  return cloneAnnotationSegments(segments);
+}
+
+function segmentsEqual(
+  leftSegments: AnnotationSegment[],
+  rightSegments: AnnotationSegment[],
+): boolean {
+  return annotationSegmentsEqual(leftSegments, rightSegments);
+}
+
+function hydrateEditorSegments(
+  segments: AnnotationSegment[],
+): AnnotationSegment[] {
+  return hydrateAnnotationSegments(segments);
+}
+
+function createEmptyAnnotationSegment(
+  segment: VadSegment,
+  index: number,
+): AnnotationSegment {
+  return {
+    ...segment,
+    id: createSegmentId(segment, index),
+    transcript: "",
+  };
 }
 
 export function App() {
@@ -221,6 +258,7 @@ export function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isRunningVad, setIsRunningVad] = useState(false);
+  const [isRunningAsr, setIsRunningAsr] = useState(false);
   const [isDenoising, setIsDenoising] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState("等待打开目录");
@@ -572,15 +610,18 @@ export function App() {
         return null;
       }
 
+      const segments = hydrateEditorSegments(loaded.segments);
+
       return {
         ...loaded,
+        segments,
         channelCount: hydratedAudio.waveform.workerChannelData.length,
         durationSec: hydratedAudio.waveform.durationSec,
         blobUrl: hydratedAudio.blobUrl,
         workerChannelData: hydratedAudio.waveform.workerChannelData,
         waveformLevels: hydratedAudio.waveform.waveformLevels,
         waveformSampleRate: hydratedAudio.waveform.sampleRate,
-        savedSegments: cloneSegments(loaded.segments),
+        savedSegments: cloneSegments(segments),
         segmentHistory: [],
         isDirty: false,
         activeAudioView: "original",
@@ -841,7 +882,7 @@ export function App() {
   );
 
   const commitSavedDocument = useCallback(
-    (audioPath: string, csvPath: string) => {
+    (audioPath: string, csvPath: string, annotationPath?: string | null) => {
       const cachedDocument = cacheRef.current.get(audioPath);
       if (!cachedDocument) {
         return;
@@ -850,6 +891,7 @@ export function App() {
       const nextDocument: HydratedDocument = {
         ...cachedDocument,
         csvPath,
+        annotationPath: annotationPath ?? cachedDocument.annotationPath,
         savedSegments: cloneSegments(cachedDocument.segments),
         segmentHistory: [],
         isDirty: false,
@@ -890,10 +932,11 @@ export function App() {
       const result = await bridge.saveAnnotation({
         audioPath: document.audioPath,
         csvPath: document.csvPath,
+        annotationPath: document.annotationPath,
         segments: document.segments,
       });
 
-      commitSavedDocument(audioPath, result.csvPath);
+      commitSavedDocument(audioPath, result.csvPath, result.annotationPath);
       return {
         audioPath,
         csvPath: result.csvPath,
@@ -914,6 +957,7 @@ export function App() {
       documentsByPath.set(audioPath, {
         audioPath: document.audioPath,
         csvPath: document.csvPath,
+        annotationPath: document.annotationPath,
         segments: document.segments,
         stem: document.stem,
       });
@@ -927,8 +971,8 @@ export function App() {
         dirtyPaths,
         documentsByPath,
         saveAnnotation: bridge.saveAnnotation,
-        onSaved: ({ audioPath, csvPath }) => {
-          commitSavedDocument(audioPath, csvPath);
+        onSaved: ({ audioPath, csvPath, annotationPath }) => {
+          commitSavedDocument(audioPath, csvPath, annotationPath);
         },
       });
 
@@ -1005,12 +1049,14 @@ export function App() {
   }, [bridge, dirtyPaths, saveAllDirtyDocuments]);
 
   const updateSegments = useCallback(
-    (updater: (segments: VadSegment[]) => VadSegment[]) => {
+    (updater: (segments: AnnotationSegment[]) => AnnotationSegment[]) => {
       if (!currentDocument) {
         return;
       }
 
-      const nextSegments = normalizeSegments(updater(currentDocument.segments));
+      const nextSegments = hydrateEditorSegments(
+        normalizeSegments(updater(currentDocument.segments)),
+      );
       if (segmentsEqual(currentDocument.segments, nextSegments)) {
         return;
       }
@@ -1040,7 +1086,20 @@ export function App() {
 
   const replaceSegmentsFromVad = useCallback(
     (segments: VadSegment[]) => {
-      updateSegments(() => segments);
+      updateSegments(() =>
+        segments.map((segment, index) =>
+          createEmptyAnnotationSegment(segment, index),
+        ),
+      );
+      setSelectedSegmentKey(null);
+    },
+    [updateSegments],
+  );
+
+  const replaceSegmentsFromAsr = useCallback(
+    (segments: AnnotationSegment[]) => {
+      assertNonOverlappingSegments(segments, "ASR 返回片段");
+      updateSegments(() => hydrateEditorSegments(segments));
       setSelectedSegmentKey(null);
     },
     [updateSegments],
@@ -1085,6 +1144,66 @@ export function App() {
       setIsRunningVad(false);
     }
   }, [bridge, currentDocument, engineConfig.vadGrpcUrl, isRunningVad, replaceSegmentsFromVad]);
+
+  const runAsrForCurrentDocument = useCallback(async () => {
+    if (!currentDocument || isRunningAsr) {
+      return;
+    }
+
+    if (currentDocument.segments.length > 0) {
+      const shouldOverwrite = window.confirm(
+        "当前文件已有标注。ASR 预标注会覆盖当前片段和转写内容，是否继续？",
+      );
+      if (!shouldOverwrite) {
+        setStatusMessage(`已跳过 ${currentDocument.stem} 的 ASR 预标注`);
+        return;
+      }
+    }
+
+    let asrGrpcUrl = engineConfig.asrGrpcUrl;
+    if (!asrGrpcUrl.trim() && !engineConfigDefaults.asrGrpcUrl.trim()) {
+      const enteredUrl = window.prompt("请输入 ASR gRPC 地址，例如 127.0.0.1:50053");
+      if (!enteredUrl?.trim()) {
+        return;
+      }
+      asrGrpcUrl = enteredUrl.trim();
+      setEngineConfig((previous) => ({ ...previous, asrGrpcUrl }));
+    }
+
+    setIsRunningAsr(true);
+    setErrorMessage(null);
+
+    try {
+      const segments = await bridge.runAsrPreannotation({
+        audioPath: currentDocument.audioPath,
+        audioContentBase64:
+          currentDocument.activeAudioView === "denoised"
+            ? currentDocument.denoisedAudioContentBase64
+            : undefined,
+        asrGrpcUrl,
+      });
+      replaceSegmentsFromAsr(segments);
+      const transcribedCount = segments.filter((segment) =>
+        Boolean(segment.transcript?.trim()),
+      ).length;
+      setStatusMessage(
+        segments.length > 0
+          ? `ASR 已生成 ${segments.length} 个片段，${transcribedCount} 段包含转写`
+          : "ASR 未返回可用转写片段",
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "ASR 预标注失败");
+    } finally {
+      setIsRunningAsr(false);
+    }
+  }, [
+    bridge,
+    currentDocument,
+    engineConfig.asrGrpcUrl,
+    engineConfigDefaults.asrGrpcUrl,
+    isRunningAsr,
+    replaceSegmentsFromAsr,
+  ]);
 
   const denoiseCurrentDocument = useCallback(async () => {
     if (!currentDocument || isDenoising) {
@@ -1253,7 +1372,25 @@ export function App() {
 
   const adjustSegment = useCallback(
     (segmentIndex: number, segment: VadSegment) => {
-      updateSegments((segments) => replaceSegment(segments, segmentIndex, segment));
+      updateSegments((segments) => {
+        const previous = segments[segmentIndex];
+        return replaceSegment(
+          segments,
+          segmentIndex,
+          previous ? { ...previous, ...segment } : segment,
+        );
+      });
+    },
+    [updateSegments],
+  );
+
+  const updateSegmentTranscript = useCallback(
+    (segmentIndex: number, transcript: string) => {
+      updateSegments((segments) =>
+        segments.map((segment, index) =>
+          index === segmentIndex ? { ...segment, transcript } : segment,
+        ),
+      );
     },
     [updateSegments],
   );
@@ -1630,6 +1767,9 @@ export function App() {
   const currentNyquist = currentDocument ? currentDocument.waveformSampleRate / 2 : 8000;
   const currentSegments = currentDocument?.segments ?? [];
   const savedSegments = currentDocument?.savedSegments ?? [];
+  const transcribedSegmentCount = currentSegments.filter((segment) =>
+    Boolean(segment.transcript?.trim()),
+  ).length;
   const segmentOverlayGroups = useMemo(
     () => getSegmentOverlayGroups(savedSegments, currentSegments),
     [currentSegments, savedSegments],
@@ -1693,6 +1833,7 @@ export function App() {
     chips: currentDocument
       ? [
           `标注段 ${currentSegments.length}`,
+          `已转写 ${transcribedSegmentCount}`,
           isSaving ? "保存中" : currentDocument.isDirty ? "未保存" : "已保存",
           currentStateLabel,
           currentDocument.denoisedMedia
@@ -1813,7 +1954,7 @@ export function App() {
           selectedChannel={selectedChannel}
           timeRange={timeRange}
           frequencyRange={frequencyRange}
-          frequencyScale={frequencyScale}
+          frequencyScale={frequencyScale as never}
           playheadSec={playheadSec}
           segments={currentSegments}
           overlayGroups={segmentOverlayGroups}
@@ -1940,6 +2081,7 @@ export function App() {
         isLoadingDocument={isLoadingDocument}
         isSaving={isSaving}
         isRunningVad={isRunningVad}
+        isRunningAsr={isRunningAsr}
         isDenoising={isDenoising}
         isPlaying={isPlaying}
         heldTool={heldTool}
@@ -1958,6 +2100,7 @@ export function App() {
         }
         onSaveCurrent={() => void saveCurrentDocument()}
         onRunVad={() => void runVadForCurrentDocument()}
+        onRunAsr={() => void runAsrForCurrentDocument()}
         onDenoise={() => void handleDenoiseAction()}
         onTogglePlayback={() => void togglePlayback()}
         onCycleTool={() => setHeldTool((previous) => getNextTool(previous))}
@@ -1970,12 +2113,16 @@ export function App() {
         moreActions={
           <MoreActionsMenu
             canDiscardChanges={Boolean(
-              currentDocument?.isDirty && !isSaving && !isRunningVad && !isDenoising,
+              currentDocument?.isDirty &&
+                !isSaving &&
+                !isRunningVad &&
+                !isRunningAsr &&
+                !isDenoising,
             )}
             canExportDataset={Boolean(
               rootPath && annotatedEntries.length > 0 && !isExporting,
             )}
-            canUndo={Boolean(currentDocument?.segmentHistory.length)}
+            canUndo={Boolean(currentDocument?.segmentHistory.length && !isRunningAsr)}
             isExporting={isExporting}
             uiThemePreference={uiThemePreference}
             onDiscardChanges={discardCurrentChanges}
@@ -1997,6 +2144,7 @@ export function App() {
                 : selectedSegmentIndex
             }
             currentStateLabel={currentStateLabel}
+            onTranscriptChange={updateSegmentTranscript}
             onToggle={() => setIsInspectorOpen((previous) => !previous)}
           />
         }
@@ -2033,7 +2181,7 @@ export function App() {
             bridge.testEngineConnection({ engine, grpcUrl })
           }
           onSave={(nextConfig) => {
-            setEngineConfig(nextConfig);
+            setEngineConfig((previous) => ({ ...previous, ...nextConfig }));
             setIsEngineSettingsOpen(false);
             setStatusMessage("已保存引擎地址配置");
           }}

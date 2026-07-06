@@ -7,7 +7,7 @@ import * as protoLoader from "@grpc/proto-loader";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createPcmWavBuffer } from "./wav";
-import { denoiseAudio, runVadPreannotation } from "./engines";
+import { denoiseAudio, runAsrPreannotation, runVadPreannotation } from "./engines";
 
 const testRoots: string[] = [];
 const servers: grpc.Server[] = [];
@@ -15,6 +15,7 @@ const protoRoot = path.resolve(__dirname, "../../protos");
 
 afterEach(async () => {
   delete process.env.LABELAU_VAD_GRPC_URL;
+  delete process.env.LABELAU_ASR_GRPC_URL;
   delete process.env.LABELAU_DENOISE_GRPC_URL;
   for (const server of servers.splice(0)) {
     server.forceShutdown();
@@ -127,6 +128,54 @@ describe("engine clients", () => {
     await expect(runVadPreannotation({ audioPath })).rejects.toThrow(
       "请在引擎设置中填写 gRPC 地址",
     );
+  });
+
+  it("sends LINEAR16 PCM to ASR and maps transcript segments", async () => {
+    const audioPath = await createWavFile();
+    const loaded = loadPackage("ux_asr.proto") as {
+      ux_asr: { UxSpeechRecognizer: grpc.ServiceClientConstructor };
+    };
+    const server = new grpc.Server();
+    server.addService(loaded.ux_asr.UxSpeechRecognizer.service, {
+      Recognize(
+        call: grpc.ServerUnaryCall<unknown, unknown>,
+        callback: grpc.sendUnaryData<unknown>,
+      ) {
+        const request = call.request as {
+          config: {
+            encoding: number;
+            sampleRateHertz: number;
+            languageCode: string;
+          };
+          audio: Buffer;
+        };
+        expect(request.config.encoding).toBe(1);
+        expect(request.config.sampleRateHertz).toBe(16000);
+        expect(request.config.languageCode).toBe("zh-CN");
+        expect(Buffer.from(request.audio)).toEqual(
+          Buffer.from([0x00, 0x00, 0xff, 0x7f]),
+        );
+        callback(null, {
+          results: [
+            {
+              startTime: { seconds: "0", nanos: 250_000_000 },
+              endTime: { seconds: "1", nanos: 0 },
+              transcript: "你好",
+            },
+          ],
+        });
+      },
+    });
+    process.env.LABELAU_ASR_GRPC_URL = await bindServer(server);
+
+    await expect(runAsrPreannotation({ audioPath })).resolves.toEqual([
+      {
+        id: "asr_0",
+        startSec: 0.25,
+        endSec: 1,
+        transcript: "你好",
+      },
+    ]);
   });
 
   it("sends LINEAR16 PCM to denoise and wraps returned PCM as WAV", async () => {

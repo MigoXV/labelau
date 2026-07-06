@@ -97,7 +97,9 @@ describe("document service", () => {
     expect(document.stem).toBe("voice");
     expect(document.csvPath).toBe(csvPath);
     expect(document.audioMeta.durationSec).toBeCloseTo(2.5, 3);
-    expect(document.segments).toEqual([{ startSec: 0.5, endSec: 0.75 }]);
+    expect(document.segments).toEqual([
+      { id: "csv_0", startSec: 0.5, endSec: 0.75, transcript: "" },
+    ]);
   });
 
   it("loads flac document metadata and existing segments", async () => {

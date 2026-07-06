@@ -1119,6 +1119,37 @@
   white-space: nowrap;
 }
 
+.inspector-field {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.inspector-field span {
+  color: var(--paper-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.inspector-field textarea {
+  width: 100%;
+  min-height: 132px;
+  resize: vertical;
+  padding: 10px 11px;
+  border: 1px solid var(--paper-line);
+  border-radius: 6px;
+  background: var(--paper-surface);
+  color: var(--paper-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.inspector-field textarea:focus {
+  outline: 1px solid var(--paper-accent-border);
+  outline-offset: 1px;
+}
+
 .paper-status-bar {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) minmax(180px, auto);

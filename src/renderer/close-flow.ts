@@ -1,19 +1,21 @@
 import type {
+  AnnotationSegment,
   SaveAnnotationRequest,
   SaveAnnotationResult,
-  VadSegment,
 } from "../shared/contracts";
 
 export interface DirtyDocumentForSave {
   audioPath: string;
   csvPath: string | null;
-  segments: VadSegment[];
+  annotationPath?: string | null;
+  segments: AnnotationSegment[];
   stem: string;
 }
 
 export interface SavedDirtyDocument {
   audioPath: string;
   csvPath: string;
+  annotationPath?: string;
   stem: string;
 }
 
@@ -43,11 +45,13 @@ export async function saveDirtyDocuments({
     const result = await saveAnnotation({
       audioPath: document.audioPath,
       csvPath: document.csvPath,
+      annotationPath: document.annotationPath,
       segments: document.segments,
     });
     const savedDocument: SavedDirtyDocument = {
       audioPath,
       csvPath: result.csvPath,
+      annotationPath: result.annotationPath,
       stem: document.stem,
     };
 

@@ -4,6 +4,7 @@ import type {
   ExportAudioFolderRequest,
   HostBridge,
   DenoiseAudioRequest,
+  RunAsrPreannotationRequest,
   RunVadPreannotationRequest,
   SaveAnnotationRequest,
   TestEngineConnectionRequest,
@@ -20,6 +21,8 @@ const hostBridge: HostBridge = {
     ipcRenderer.invoke("host:saveAnnotation", request),
   runVadPreannotation: (request: RunVadPreannotationRequest) =>
     ipcRenderer.invoke("host:runVadPreannotation", request),
+  runAsrPreannotation: (request: RunAsrPreannotationRequest) =>
+    ipcRenderer.invoke("host:runAsrPreannotation", request),
   denoiseAudio: (request: DenoiseAudioRequest) =>
     ipcRenderer.invoke("host:denoiseAudio", request),
   getEngineConfigDefaults: () =>

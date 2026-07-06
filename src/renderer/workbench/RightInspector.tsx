@@ -8,6 +8,7 @@ export function RightInspector({
   selectedSegment,
   selectedSegmentIndex,
   currentStateLabel,
+  onTranscriptChange,
   onToggle,
 }: RightInspectorProps) {
   const title = selectedSegment ? "当前标注片段" : "未选择标注片段";
@@ -91,8 +92,20 @@ export function RightInspector({
               <dd>{currentDocument?.isDirty ? "未保存" : "已保存"}</dd>
             </div>
           </dl>
+          {typeof selectedSegmentIndex === "number" ? (
+            <label className="inspector-field">
+              <span>转写内容</span>
+              <textarea
+                value={selectedSegment.transcript ?? ""}
+                placeholder="输入当前片段的转写文本"
+                onChange={(event) =>
+                  onTranscriptChange(selectedSegmentIndex, event.target.value)
+                }
+              />
+            </label>
+          ) : null}
           <p className="inspector-hint">
-            可在波形或频谱中拖拽边界调整片段，按 E 切换擦除工具。
+            可在波形或频谱中拖拽边界调整片段，转写修改会进入未保存状态。
           </p>
         </div>
       ) : (
@@ -115,6 +128,16 @@ export function RightInspector({
           <div>
             <dt>标注段</dt>
             <dd>{currentDocument ? currentDocument.segments.length : 0}</dd>
+          </div>
+          <div>
+            <dt>已转写</dt>
+            <dd>
+              {currentDocument
+                ? currentDocument.segments.filter((segment) =>
+                    Boolean(segment.transcript?.trim()),
+                  ).length
+                : 0}
+            </dd>
           </div>
           <div>
             <dt>保存状态</dt>

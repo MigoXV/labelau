@@ -1,5 +1,9 @@
 import type { WaveformLevel } from "svara-ui/audio";
-import type { LoadedAudioDocument, VadSegment } from "../../shared/contracts";
+import type {
+  AnnotationSegment,
+  LoadedAudioDocument,
+  VadSegment,
+} from "../../shared/contracts";
 
 export type HeldTool = "mark" | "erase" | null;
 export type EntryState = "dirty" | "saved" | "matched" | "new";
@@ -23,8 +27,8 @@ export interface HydratedDocument extends LoadedAudioDocument {
   workerChannelData: Int8Array[];
   waveformLevels: WaveformLevel[][];
   waveformSampleRate: number;
-  savedSegments: VadSegment[];
-  segmentHistory: VadSegment[][];
+  savedSegments: AnnotationSegment[];
+  segmentHistory: AnnotationSegment[][];
   isDirty: boolean;
   denoisedAudioContentBase64?: string;
   activeAudioView: AudioViewMode;

@@ -9,7 +9,7 @@ import {
 } from "../shared/constants";
 import type { FrequencyScale } from "../shared/contracts";
 import { clamp, lerp } from "../shared/math";
-import type { SystemThemeMode } from "../renderer/theme";
+import type { SystemThemeMode } from "svara-ui/labelau";
 
 interface WorkerDocument {
   channelData: Int8Array[];

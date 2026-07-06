@@ -26,7 +26,7 @@ function getTitle(props: MainWorkbenchProps): string {
     case "no-selection":
       return props.isLoadingDocument ? "正在载入音频" : "选择左侧音频开始标注";
     case "ready":
-      return props.currentDocument?.stem ?? "音频标注工作台";
+      return "音频标注工作台";
   }
 }
 
@@ -131,6 +131,7 @@ export function MainWorkbench(props: MainWorkbenchProps) {
     nextEntry,
     isSaving,
     isRunningVad,
+    isRunningAsr,
     isDenoising,
     isPlaying,
     heldTool,
@@ -145,6 +146,7 @@ export function MainWorkbench(props: MainWorkbenchProps) {
     onSelectNext,
     onSaveCurrent,
     onRunVad,
+    onRunAsr,
     onDenoise,
     onTogglePlayback,
     onCycleTool,
@@ -154,7 +156,8 @@ export function MainWorkbench(props: MainWorkbenchProps) {
     editorRef,
   } = props;
 
-  const canUseDocumentActions = Boolean(currentDocument) && !isRunningVad && !isDenoising;
+  const canUseDocumentActions =
+    Boolean(currentDocument) && !isRunningVad && !isRunningAsr && !isDenoising;
 
   return (
     <main
@@ -243,6 +246,13 @@ export function MainWorkbench(props: MainWorkbenchProps) {
                   onClick={onRunVad}
                 >
                   {isRunningVad ? "预标注中" : "VAD 自动切分"}
+                </button>
+                <button
+                  className="ghost-button tool-button"
+                  disabled={!canUseDocumentActions}
+                  onClick={onRunAsr}
+                >
+                  {isRunningAsr ? "ASR 预标注中" : "ASR 预标注"}
                 </button>
                 <button
                   className="ghost-button tool-button"

@@ -4,13 +4,19 @@ import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 
 import type {
+  AnnotationSegment,
   DenoiseAudioResult,
   RunVadPreannotationRequest,
+  RunAsrPreannotationRequest,
   EngineConfig,
   TestEngineConnectionRequest,
   TestEngineConnectionResult,
   VadSegment,
 } from "../shared/contracts";
+import {
+  assertNonOverlappingSegments,
+  hydrateAnnotationSegments,
+} from "../shared/annotations";
 import { getAudioExtension } from "../shared/audio-format";
 import { normalizeSegments } from "../shared/vad";
 
@@ -20,6 +26,7 @@ const ENGINE_DEADLINE_MS = 60_000;
 const ENGINE_MAX_MESSAGE_BYTES = 500 * 1024 * 1024;
 const PROTO_ROOT = path.resolve(__dirname, "../../protos");
 const VAD_PROTO_PATH = path.join(PROTO_ROOT, "ux_vad.proto");
+const ASR_PROTO_PATH = path.join(PROTO_ROOT, "ux_asr.proto");
 const DENOISE_PROTO_PATH = path.join(PROTO_ROOT, "ux_denoise.proto");
 
 type GrpcCallback<TResponse> = (error: Error | null, response?: TResponse) => void;
@@ -39,6 +46,26 @@ interface VadClient extends GrpcClientLifecycle {
   Detect: UnaryMethod<
     { config: { encoding: number; sampleRateHertz: number }; audio: Buffer },
     { results?: Array<{ startTime?: DurationLike; endTime?: DurationLike }> }
+  >;
+}
+
+interface AsrClient extends GrpcClientLifecycle {
+  Recognize: UnaryMethod<
+    {
+      config: {
+        encoding: number;
+        sampleRateHertz: number;
+        languageCode: string;
+      };
+      audio: Buffer;
+    },
+    {
+      results?: Array<{
+        startTime?: DurationLike;
+        endTime?: DurationLike;
+        transcript?: string;
+      }>;
+    }
   >;
 }
 
@@ -92,6 +119,23 @@ function createVadClient(address: string): VadClient {
     "grpc.max_send_message_length": ENGINE_MAX_MESSAGE_BYTES,
     "grpc.max_receive_message_length": ENGINE_MAX_MESSAGE_BYTES,
   }) as unknown as VadClient;
+}
+
+function createAsrClient(address: string): AsrClient {
+  const loaded = loadGrpcPackage(ASR_PROTO_PATH) as {
+    ux_asr?: {
+      UxSpeechRecognizer?: grpc.ServiceClientConstructor;
+    };
+  };
+  const Client = loaded.ux_asr?.UxSpeechRecognizer;
+  if (!Client) {
+    throw new Error("无法加载 ASR gRPC proto");
+  }
+
+  return new Client(address, grpc.credentials.createInsecure(), {
+    "grpc.max_send_message_length": ENGINE_MAX_MESSAGE_BYTES,
+    "grpc.max_receive_message_length": ENGINE_MAX_MESSAGE_BYTES,
+  }) as unknown as AsrClient;
 }
 
 function createDenoiseClient(address: string): DenoiseClient {
@@ -217,6 +261,45 @@ export async function runVadPreannotation(
   }
 }
 
+export async function runAsrPreannotation(
+  request: RunAsrPreannotationRequest,
+): Promise<AnnotationSegment[]> {
+  const address = getConfiguredAddress(
+    request.asrGrpcUrl,
+    process.env.LABELAU_ASR_GRPC_URL,
+    " ASR ",
+  );
+
+  assertWavAudio(request.audioPath);
+  const audio = await readWavPcmAudio(request.audioPath);
+  const pcm = request.audioContentBase64
+    ? Buffer.from(request.audioContentBase64, "base64").subarray(44)
+    : audio.pcm;
+
+  try {
+    const client = createAsrClient(address);
+    const response = await callUnary(client.Recognize.bind(client), {
+      config: {
+        encoding: 1,
+        sampleRateHertz: audio.sampleRate,
+        languageCode: "zh-CN",
+      },
+      audio: pcm,
+    });
+    const rawSegments = (response.results ?? []).map((result, index) => ({
+      id: `asr_${index}`,
+      startSec: durationToSeconds(result.startTime),
+      endSec: durationToSeconds(result.endTime),
+      transcript: result.transcript ?? "",
+    }));
+    assertNonOverlappingSegments(rawSegments, "ASR 返回片段");
+    const segments = hydrateAnnotationSegments(rawSegments);
+    return segments;
+  } catch (error) {
+    throw mapGrpcError(error, "ASR 预标注失败");
+  }
+}
+
 export async function denoiseAudio(
   audioPath: string,
   resolveAudioUrl: (id: string) => string,
@@ -279,6 +362,7 @@ export function getDenoisedAudio(id: string): Buffer | null {
 export function getEngineConfigDefaults(): EngineConfig {
   return {
     vadGrpcUrl: process.env.LABELAU_VAD_GRPC_URL ?? "",
+    asrGrpcUrl: process.env.LABELAU_ASR_GRPC_URL ?? "",
     denoiseGrpcUrl: process.env.LABELAU_DENOISE_GRPC_URL ?? "",
   };
 }
@@ -298,15 +382,23 @@ function waitForReady(client: GrpcClientLifecycle): Promise<void> {
 export async function testEngineConnection(
   request: TestEngineConnectionRequest,
 ): Promise<TestEngineConnectionResult> {
-  const isVad = request.engine === "vad";
-  const label = isVad ? "VAD" : "降噪";
+  const label =
+    request.engine === "vad" ? "VAD" : request.engine === "asr" ? "ASR" : "降噪";
 
   let address: string;
   try {
     address = getConfiguredAddress(
       request.grpcUrl,
-      isVad ? process.env.LABELAU_VAD_GRPC_URL : process.env.LABELAU_DENOISE_GRPC_URL,
-      isVad ? " VAD " : "降噪",
+      request.engine === "vad"
+        ? process.env.LABELAU_VAD_GRPC_URL
+        : request.engine === "asr"
+          ? process.env.LABELAU_ASR_GRPC_URL
+          : process.env.LABELAU_DENOISE_GRPC_URL,
+      request.engine === "vad"
+        ? " VAD "
+        : request.engine === "asr"
+          ? " ASR "
+          : "降噪",
     );
   } catch (error) {
     return {
@@ -315,7 +407,12 @@ export async function testEngineConnection(
     };
   }
 
-  const client = isVad ? createVadClient(address) : createDenoiseClient(address);
+  const client =
+    request.engine === "vad"
+      ? createVadClient(address)
+      : request.engine === "asr"
+        ? createAsrClient(address)
+        : createDenoiseClient(address);
   try {
     await waitForReady(client);
     return {

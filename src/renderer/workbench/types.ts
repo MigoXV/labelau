@@ -2,14 +2,14 @@ import type { ReactNode } from "react";
 import type { UiThemePreference } from "svara-ui/labelau";
 
 import type {
+  AnnotationSegment,
   CorpusEntry,
   CorpusEntryTree,
-  VadSegment,
+  FrequencyScale,
 } from "../../shared/contracts";
 import type {
   EntryOverlayState,
   FileFilter,
-  FrequencyScale,
   HeldTool,
   HydratedDocument,
   PlaybackRate,
@@ -85,13 +85,14 @@ export interface MainWorkbenchProps {
   rootPath: string;
   currentDocument: HydratedDocument | null;
   selectedFileContext: SelectedFileContext | null;
-  selectedSegment: VadSegment | null;
+  selectedSegment: AnnotationSegment | null;
   selectedSegmentIndex: number | null;
   previousEntry: CorpusEntry | null;
   nextEntry: CorpusEntry | null;
   isLoadingDocument: boolean;
   isSaving: boolean;
   isRunningVad: boolean;
+  isRunningAsr: boolean;
   isDenoising: boolean;
   isPlaying: boolean;
   heldTool: HeldTool;
@@ -108,6 +109,7 @@ export interface MainWorkbenchProps {
   onSelectNext: () => void;
   onSaveCurrent: () => void;
   onRunVad: () => void;
+  onRunAsr: () => void;
   onDenoise: () => void;
   onTogglePlayback: () => void;
   onCycleTool: () => void;
@@ -120,8 +122,9 @@ export interface MainWorkbenchProps {
 export interface RightInspectorProps {
   isOpen: boolean;
   currentDocument: HydratedDocument | null;
-  selectedSegment: VadSegment | null;
+  selectedSegment: AnnotationSegment | null;
   selectedSegmentIndex: number | null;
   currentStateLabel: string;
+  onTranscriptChange: (index: number, transcript: string) => void;
   onToggle: () => void;
 }
