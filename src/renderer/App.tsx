@@ -31,7 +31,10 @@ import {
   useSystemTheme,
 } from "svara-ui/labelau";
 
-import { hydrateFrontendAudio } from "./audio-hydration";
+import {
+  hydrateFrontendAudio,
+  hydrateSpectrogramChannelData,
+} from "./audio-hydration";
 import { getHostBridge } from "./bridge";
 import {
   saveDirtyDocuments,
@@ -223,6 +226,7 @@ export function App() {
     audioPath: string;
     promise: Promise<HydratedDocument | null>;
   } | null>(null);
+  const spectrogramHydrationRef = useRef<AbortController | null>(null);
   const treePanelRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<HTMLElement | null>(null);
   const sidebarResizeRef = useRef<{
@@ -764,6 +768,7 @@ export function App() {
       const hydratedAudio = await hydrateFrontendAudio(
         loaded.audioUrl,
         Math.min(loaded.sampleRate, MAX_FRONTEND_SAMPLE_RATE),
+        { includeSpectrogramData: showSpectrogram },
         signal,
       );
       if (signal.aborted) {
@@ -775,7 +780,7 @@ export function App() {
       return {
         ...loaded,
         segments,
-        channelCount: hydratedAudio.waveform.workerChannelData.length,
+        channelCount: hydratedAudio.waveform.waveformLevels.length,
         durationSec: hydratedAudio.waveform.durationSec,
         blobUrl: hydratedAudio.playbackUrl,
         workerChannelData: hydratedAudio.waveform.workerChannelData,
@@ -791,12 +796,12 @@ export function App() {
           workerChannelData: hydratedAudio.waveform.workerChannelData,
           waveformLevels: hydratedAudio.waveform.waveformLevels,
           waveformSampleRate: hydratedAudio.waveform.sampleRate,
-          channelCount: hydratedAudio.waveform.workerChannelData.length,
+          channelCount: hydratedAudio.waveform.waveformLevels.length,
           durationSec: hydratedAudio.waveform.durationSec,
         },
       };
     },
-    [bridge],
+    [bridge, showSpectrogram],
   );
 
   const loadHydratedDocument = useCallback(
@@ -897,8 +902,71 @@ export function App() {
     }
 
     if (!showSpectrogram) {
+      spectrogramHydrationRef.current?.abort();
+      spectrogramHydrationRef.current = null;
       spectrogramWorkerRef.current?.unloadDocument(currentDocument.audioPath);
       return;
+    }
+
+    if (currentDocument.workerChannelData.length === 0) {
+      spectrogramHydrationRef.current?.abort();
+      const abortController = new AbortController();
+      spectrogramHydrationRef.current = abortController;
+      const audioPath = currentDocument.audioPath;
+      const audioUrl = currentDocument.audioUrl;
+      const activeAudioView = currentDocument.activeAudioView;
+      const waveformSampleRate = currentDocument.waveformSampleRate;
+
+      void (async () => {
+        try {
+          const workerChannelData = await hydrateSpectrogramChannelData(
+            audioUrl,
+            waveformSampleRate,
+            abortController.signal,
+          );
+          if (abortController.signal.aborted) {
+            return;
+          }
+
+          setCurrentDocument((previous) => {
+            if (
+              !previous ||
+              previous.audioPath !== audioPath ||
+              previous.audioUrl !== audioUrl ||
+              previous.activeAudioView !== activeAudioView
+            ) {
+              return previous;
+            }
+
+            const nextDocument: HydratedDocument = {
+              ...previous,
+              workerChannelData,
+              originalMedia:
+                activeAudioView === "original"
+                  ? { ...previous.originalMedia, workerChannelData }
+                  : previous.originalMedia,
+              denoisedMedia:
+                activeAudioView === "denoised" && previous.denoisedMedia
+                  ? { ...previous.denoisedMedia, workerChannelData }
+                  : previous.denoisedMedia,
+            };
+            cacheDocument(nextDocument);
+            return nextDocument;
+          });
+        } catch (error) {
+          if (!abortController.signal.aborted) {
+            setErrorMessage(
+              error instanceof Error
+                ? error.message
+                : "语谱图数据准备失败",
+            );
+          }
+        }
+      })();
+
+      return () => {
+        abortController.abort();
+      };
     }
 
     getSpectrogramWorker().loadDocument(
@@ -908,8 +976,11 @@ export function App() {
     );
   }, [
     currentDocument?.audioPath,
+    currentDocument?.activeAudioView,
+    currentDocument?.audioUrl,
     currentDocument?.waveformSampleRate,
     currentDocument?.workerChannelData,
+    cacheDocument,
     getSpectrogramWorker,
     showSpectrogram,
   ]);
@@ -1420,6 +1491,7 @@ export function App() {
       const hydratedAudio = await hydrateFrontendAudio(
         result.audioUrl,
         Math.min(result.sampleRate, MAX_FRONTEND_SAMPLE_RATE),
+        { includeSpectrogramData: showSpectrogram },
       );
       const denoisedMedia = {
         audioUrl: result.audioUrl,
@@ -1427,7 +1499,7 @@ export function App() {
         workerChannelData: hydratedAudio.waveform.workerChannelData,
         waveformLevels: hydratedAudio.waveform.waveformLevels,
         waveformSampleRate: hydratedAudio.waveform.sampleRate,
-        channelCount: hydratedAudio.waveform.workerChannelData.length,
+        channelCount: hydratedAudio.waveform.waveformLevels.length,
         durationSec: hydratedAudio.waveform.durationSec,
       };
 
@@ -1473,6 +1545,7 @@ export function App() {
     isDenoising,
     playbackRate,
     showDenoisedAudio,
+    showSpectrogram,
   ]);
 
   const getDenoiseActionLabel = useCallback(() => {

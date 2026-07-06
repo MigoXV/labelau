@@ -1,6 +1,8 @@
 import type { WaveformLevel } from "svara-ui/audio";
 
-const WAVEFORM_BASE_SAMPLES_PER_BIN = 32;
+const WAVEFORM_MIN_SAMPLES_PER_BIN = 64;
+const WAVEFORM_TARGET_MAX_BASE_BINS = 24_000;
+const WAVEFORM_MAX_SAMPLES_PER_BIN_SCAN = 32;
 const MAX_BINS_PER_YIELD = 2048;
 
 const audioContexts = new Map<number, AudioContext>();
@@ -13,6 +15,10 @@ interface HydratedFrontendAudio {
     sampleRate: number;
     durationSec: number;
   };
+}
+
+interface HydrateFrontendAudioOptions {
+  includeSpectrogramData?: boolean;
 }
 
 function abortError(): DOMException {
@@ -60,15 +66,37 @@ function downsampleLevel(level: WaveformLevel): WaveformLevel {
   };
 }
 
+function getBaseSamplesPerBin(sampleCount: number): number {
+  let samplesPerBin = WAVEFORM_MIN_SAMPLES_PER_BIN;
+  while (
+    Math.ceil(sampleCount / samplesPerBin) > WAVEFORM_TARGET_MAX_BASE_BINS
+  ) {
+    samplesPerBin *= 2;
+  }
+
+  return samplesPerBin;
+}
+
+function getSampleStep(start: number, end: number): number {
+  return Math.max(
+    1,
+    Math.floor((end - start) / WAVEFORM_MAX_SAMPLES_PER_BIN_SCAN),
+  );
+}
+
 async function buildChannelAnalysis(
   channelData: Float32Array,
+  includeSpectrogramData: boolean,
   signal?: AbortSignal,
 ): Promise<{
   workerChannelData: Int8Array;
   waveformLevels: WaveformLevel[];
 }> {
-  const workerChannelData = new Int8Array(channelData.length);
-  const binCount = Math.ceil(channelData.length / WAVEFORM_BASE_SAMPLES_PER_BIN);
+  const workerChannelData = includeSpectrogramData
+    ? new Int8Array(channelData.length)
+    : new Int8Array(0);
+  const baseSamplesPerBin = getBaseSamplesPerBin(channelData.length);
+  const binCount = Math.ceil(channelData.length / baseSamplesPerBin);
   const min = new Float32Array(binCount);
   const max = new Float32Array(binCount);
 
@@ -78,15 +106,16 @@ async function buildChannelAnalysis(
       await yieldToMain();
     }
 
-    const start = binIndex * WAVEFORM_BASE_SAMPLES_PER_BIN;
+    const start = binIndex * baseSamplesPerBin;
     const end = Math.min(
-      start + WAVEFORM_BASE_SAMPLES_PER_BIN,
+      start + baseSamplesPerBin,
       channelData.length,
     );
+    const sampleStep = includeSpectrogramData ? 1 : getSampleStep(start, end);
     let binMin = 1;
     let binMax = -1;
 
-    for (let sampleIndex = start; sampleIndex < end; sampleIndex += 1) {
+    for (let sampleIndex = start; sampleIndex < end; sampleIndex += sampleStep) {
       const sample = Math.max(-1, Math.min(1, channelData[sampleIndex]));
       if (sample < binMin) {
         binMin = sample;
@@ -94,7 +123,9 @@ async function buildChannelAnalysis(
       if (sample > binMax) {
         binMax = sample;
       }
-      workerChannelData[sampleIndex] = Math.round(sample * 127);
+      if (includeSpectrogramData) {
+        workerChannelData[sampleIndex] = Math.round(sample * 127);
+      }
     }
 
     min[binIndex] = binMin;
@@ -105,7 +136,7 @@ async function buildChannelAnalysis(
     {
       min,
       max,
-      samplesPerBin: WAVEFORM_BASE_SAMPLES_PER_BIN,
+      samplesPerBin: baseSamplesPerBin,
     },
   ];
 
@@ -123,6 +154,7 @@ async function buildChannelAnalysis(
 export async function hydrateFrontendAudio(
   url: string,
   sampleRate: number,
+  options: HydrateFrontendAudioOptions = {},
   signal?: AbortSignal,
 ): Promise<HydratedFrontendAudio> {
   const response = await fetch(url, { signal });
@@ -140,12 +172,16 @@ export async function hydrateFrontendAudio(
 
   const workerChannelData: Int8Array[] = [];
   const waveformLevels: WaveformLevel[][] = [];
+  const includeSpectrogramData = Boolean(options.includeSpectrogramData);
   for (let channelIndex = 0; channelIndex < audioBuffer.numberOfChannels; channelIndex += 1) {
     const analysis = await buildChannelAnalysis(
       audioBuffer.getChannelData(channelIndex),
+      includeSpectrogramData,
       signal,
     );
-    workerChannelData.push(analysis.workerChannelData);
+    if (includeSpectrogramData) {
+      workerChannelData.push(analysis.workerChannelData);
+    }
     waveformLevels.push(analysis.waveformLevels);
   }
 
@@ -158,4 +194,46 @@ export async function hydrateFrontendAudio(
       durationSec: audioBuffer.duration,
     },
   };
+}
+
+export async function hydrateSpectrogramChannelData(
+  url: string,
+  sampleRate: number,
+  signal?: AbortSignal,
+): Promise<Int8Array[]> {
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch audio: ${response.status}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  assertNotAborted(signal);
+
+  const audioBuffer = await getAudioContext(sampleRate).decodeAudioData(
+    arrayBuffer,
+  );
+  assertNotAborted(signal);
+
+  const channelData: Int8Array[] = [];
+  for (let channelIndex = 0; channelIndex < audioBuffer.numberOfChannels; channelIndex += 1) {
+    if (channelIndex > 0) {
+      await yieldToMain();
+    }
+
+    const source = audioBuffer.getChannelData(channelIndex);
+    const target = new Int8Array(source.length);
+    for (let sampleIndex = 0; sampleIndex < source.length; sampleIndex += 1) {
+      if (sampleIndex % (MAX_BINS_PER_YIELD * 8) === 0) {
+        assertNotAborted(signal);
+        await yieldToMain();
+      }
+
+      target[sampleIndex] = Math.round(
+        Math.max(-1, Math.min(1, source[sampleIndex])) * 127,
+      );
+    }
+    channelData.push(target);
+  }
+
+  return channelData;
 }
